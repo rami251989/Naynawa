@@ -357,15 +357,15 @@ with tab_file:
             st.error(f"❌ خطأ: {e}")
      
 # ----------------------------------------------------------------------------- #
-# 4) 📥 رفع Excel (الاسم + اسم مركز الاقتراع) — بحث أدق بالعربية دون تغيير البيانات الأصلية
+# 4) 📥 رفع Excel (الاسم + اسم مركز الاقتراع) — محسّن وسريع (بحث على دفعات)
 # ----------------------------------------------------------------------------- #
 with tab_file_name_center:
     st.subheader("📥 البحث باستخدام ملف Excel (الاسم + اسم مركز الاقتراع)")
-    st.markdown("**يُفضّل أن يحتوي الملف على عمودين:** `الاسم` أو `الاسم الثلاثي` و`اسم مركز الاقتراع`.")
+    st.markdown("**يفضّل أن يحتوي الملف على عمودين:** `الاسم` أو `الاسم الثلاثي` و`اسم مركز الاقتراع`.")
 
-    # ✅ تأكيد وجود دالّة التطبيع (للمقارنة فقط)
+    # ✅ تأكيد وجود دالة normalize_ar
     try:
-        normalize_ar  # موجودة مسبقًا؟
+        normalize_ar
     except NameError:
         AR_DIACRITICS = str.maketrans('', '', ''.join([
             '\u0610','\u0611','\u0612','\u0613','\u0614','\u0615','\u0616','\u0617','\u0618','\u0619','\u061A',
@@ -376,8 +376,8 @@ with tab_file_name_center:
             if text is None:
                 return ""
             s = str(text)
-            s = s.translate(AR_DIACRITICS)               # إزالة التشكيل
-            s = s.replace("ـ", "").replace(" ", "").strip()  # إزالة التطويل والمسافات
+            s = s.translate(AR_DIACRITICS)
+            s = s.replace("ـ", "").replace(" ", "").strip()
             s = (s.replace("أ","ا").replace("إ","ا").replace("آ","ا")
                    .replace("ى","ي").replace("ئ","ي")
                    .replace("ؤ","و").replace("ة","ه"))
@@ -391,73 +391,82 @@ with tab_file_name_center:
             # 1️⃣ قراءة الملف
             xdf = pd.read_excel(file_nc, engine="openpyxl")
 
-            # تنظيف أسماء الأعمدة من الرموز/المسافات الخفية
+            # تنظيف أسماء الأعمدة من الرموز/المسافات
             def clean_col_name(c):
                 return str(c).replace("\u200f", "").replace("\u200e", "").strip().lower()
             cleaned_cols = {clean_col_name(c): c for c in xdf.columns}
 
-            # أسماء الأعمدة الممكنة
             name_col_candidates = ["الاسم", "الاسم الثلاثي", "name", "full name", "fullname"]
-            center_name_candidates = ["اسم مركز الاقتراع", "مركز الاقتراع", "polling center name", "center name"]
+            center_col_candidates = ["اسم مركز الاقتراع", "مركز الاقتراع", "polling center name", "center name"]
 
-            # اختيار العمود الصحيح
             def pick_col(cands):
                 for c in cands:
-                    key = clean_col_name(c)
-                    if key in cleaned_cols:
-                        return cleaned_cols[key]
+                    if clean_col_name(c) in cleaned_cols:
+                        return cleaned_cols[clean_col_name(c)]
                 return None
 
             name_col = pick_col(name_col_candidates)
-            center_name_col = pick_col(center_name_candidates)
+            center_col = pick_col(center_col_candidates)
 
-            if not name_col or not center_name_col:
+            if not name_col or not center_col:
                 st.error("❌ لم يتم العثور على الأعمدة المطلوبة. تأكد من وجود عمود للاسم وآخر لاسم مركز الاقتراع.")
                 st.stop()
 
-            # 2️⃣ قائمة أسماء المراكز من الملف
+            # 2️⃣ تجهيز قائمة المراكز
             centers_list = (
-                xdf[center_name_col]
-                .dropna()
-                .astype(str)
-                .str.strip()
-                .tolist()
+                xdf[center_col].dropna().astype(str).str.strip().tolist()
             )
             unique_centers = sorted(list(set(centers_list)))
             if not unique_centers:
                 st.warning("⚠️ لا توجد أسماء مراكز صالحة في الملف.")
                 st.stop()
 
-            # 3️⃣ جلب سجلات تلك المراكز من القاعدة
+            # 3️⃣ تحميل البيانات على دفعات (Batch)
             conn = get_conn()
-            placeholders = ",".join(["%s"] * len(unique_centers))
-            query = f"""
-                SELECT
-                    "رقم الناخب","الاسم الثلاثي","الجنس","هاتف","رقم العائلة",
-                    "اسم مركز الاقتراع","رقم مركز الاقتراع",
-                    "المدينة","رقم مركز التسجيل","اسم مركز التسجيل","تاريخ الميلاد"
-                FROM "naynawa"
-                WHERE "اسم مركز الاقتراع" IN ({placeholders})
-            """
-            db_df = pd.read_sql_query(query, conn, params=unique_centers)
+            batch_size = 100
+            all_batches = [unique_centers[i:i+batch_size] for i in range(0, len(unique_centers), batch_size)]
+            all_dfs = []
+            progress = st.progress(0)
+            total_batches = len(all_batches)
+
+            for i, batch in enumerate(all_batches):
+                placeholders = ",".join(["%s"] * len(batch))
+                query = f"""
+                    SELECT
+                        "رقم الناخب","الاسم الثلاثي","الجنس","هاتف","رقم العائلة",
+                        "اسم مركز الاقتراع","رقم مركز الاقتراع",
+                        "المدينة","رقم مركز التسجيل","اسم مركز التسجيل","تاريخ الميلاد"
+                    FROM "naynawa"
+                    WHERE "اسم مركز الاقتراع" IN ({placeholders})
+                """
+                df_part = pd.read_sql_query(query, conn, params=batch)
+                if not df_part.empty:
+                    all_dfs.append(df_part)
+                progress.progress((i + 1) / total_batches)
+
             conn.close()
 
-            if db_df.empty:
-                st.warning("⚠️ لم يتم العثور على أي سجلات لتلك المراكز في القاعدة.")
+            if not all_dfs:
+                st.warning("⚠️ لم يتم العثور على أي سجلات للمراكز الموجودة في الملف.")
                 st.stop()
 
-            # 4️⃣ التطبيع للمقارنة فقط (لا نغيّر بيانات العرض)
+            db_df = pd.concat(all_dfs, ignore_index=True)
+
+            # 4️⃣ التطبيع للمقارنة فقط
             db_df["__norm_name"] = db_df["الاسم الثلاثي"].apply(normalize_ar)
             db_df["__norm_center"] = db_df["اسم مركز الاقتراع"].apply(normalize_ar)
 
             xdf["__norm_name"] = xdf[name_col].apply(normalize_ar)
-            xdf["__norm_center"] = xdf[center_name_col].apply(normalize_ar)
+            xdf["__norm_center"] = xdf[center_col].apply(normalize_ar)
 
-            # 5️⃣ المطابقة: الاسم + اسم المركز (بعد التطبيع)
+            # 5️⃣ البحث والمطابقة
             matches = []
+            missing = []
+            st.info("🔍 جاري المطابقة بين الأسماء والمراكز...")
             for _, row in xdf.iterrows():
                 nname = row["__norm_name"]
                 cname = row["__norm_center"]
+
                 matched_rows = db_df[
                     (db_df["__norm_center"] == cname) &
                     (db_df["__norm_name"] == nname)
@@ -465,10 +474,15 @@ with tab_file_name_center:
                 if not matched_rows.empty:
                     for _, r in matched_rows.iterrows():
                         matches.append(r)
+                else:
+                    missing.append({
+                        "الاسم (من الملف)": row[name_col],
+                        "اسم مركز الاقتراع (من الملف)": row[center_col]
+                    })
 
             found_df = pd.DataFrame(matches)
 
-            # 6️⃣ تجهيز النتائج النهائية كما في تبويب رفع الأرقام (دون أي تغيير للنص)
+            # 6️⃣ عرض النتائج
             if not found_df.empty:
                 out_df = found_df[[
                     "رقم الناخب","الاسم الثلاثي","الجنس","هاتف","رقم العائلة",
@@ -477,21 +491,11 @@ with tab_file_name_center:
                 ]].copy()
 
                 out_df = out_df.rename(columns={
-                    "رقم الناخب": "رقم الناخب",
                     "الاسم الثلاثي": "الاسم",
-                    "الجنس": "الجنس",
                     "هاتف": "رقم الهاتف",
-                    "رقم العائلة": "رقم العائلة",
-                    "اسم مركز الاقتراع": "مركز الاقتراع",
-                    "رقم مركز الاقتراع": "رقم مركز الاقتراع",
-                    "المدينة": "المدينة",
-                    "رقم مركز التسجيل": "رقم مركز التسجيل",
-                    "اسم مركز التسجيل": "اسم مركز التسجيل",
-                    "تاريخ الميلاد": "تاريخ الميلاد"
+                    "اسم مركز الاقتراع": "مركز الاقتراع"
                 })
                 out_df["الجنس"] = out_df["الجنس"].apply(map_gender)
-
-                # أعمدة الإخراج الإضافية (نفس صيغة تبويب رفع الأرقام)
                 out_df["رقم المندوب الرئيسي"] = ""
                 out_df["الحالة"] = 0
                 out_df["ملاحظة"] = ""
@@ -503,10 +507,9 @@ with tab_file_name_center:
                     "رقم المندوب الرئيسي","الحالة","ملاحظة"
                 ]]
 
-                st.markdown("### ✅ النتائج المطابقة")
+                st.success(f"✅ تم العثور على {len(out_df)} سجل مطابق.")
                 st.dataframe(out_df, use_container_width=True, height=450)
 
-                # حفظ وتنزيل النتائج
                 out_file = "نتائج_الاسم_واسم_المركز.xlsx"
                 out_df.to_excel(out_file, index=False, engine="openpyxl")
                 wb = load_workbook(out_file)
@@ -517,19 +520,9 @@ with tab_file_name_center:
                         file_name="نتائج_الاسم_واسم_المركز.xlsx",
                         mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
             else:
-                st.warning("⚠️ لا توجد نتائج مطابقة.")
+                st.warning("⚠️ لم يتم العثور على أي تطابقات.")
 
-            # 7️⃣ غير الموجودين (بالاسم واسم المركز من الملف)
-            found_keys = set(zip(db_df["__norm_center"], db_df["__norm_name"]))
-            missing = []
-            for _, row in xdf.iterrows():
-                key = (row["__norm_center"], row["__norm_name"])
-                if key not in found_keys:
-                    missing.append({
-                        "الاسم (من الملف)": row[name_col],
-                        "اسم مركز الاقتراع (من الملف)": row[center_name_col]
-                    })
-
+            # 7️⃣ الأسماء غير الموجودة
             if missing:
                 missing_df = pd.DataFrame(missing)
                 st.markdown("### ❌ غير موجودين في القاعدة")
