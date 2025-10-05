@@ -1,10 +1,7 @@
 streamlit
 pandas
-psycopg2-binary
 openpyxl
+psycopg2-binary
 python-dotenv
 google-cloud-vision
-opencv-python-headless
-numpy
-Pillow
 rapidfuzz==3.9.0
