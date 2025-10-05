@@ -355,35 +355,39 @@ with tab_file:
                 st.warning("⚠️ لا يوجد نتائج")
         except Exception as e:
             st.error(f"❌ خطأ: {e}")
- # ----------------------------------------------------------------------------- #
-# 4) 📥 رفع Excel (الاسم + اسم مركز الاقتراع) — نسخة محسّنة ومستقرة
 # ----------------------------------------------------------------------------- #
-with tab_file_name_center:
-    st.subheader("📥 البحث باستخدام ملف Excel (الاسم + اسم مركز الاقتراع)")
+# 4) 📘 رفع Excel (الاسم + اسم مركز الاقتراع) — نسخة نهائية بخوارزمية مطابقة ذكية
+# ----------------------------------------------------------------------------- #
+from rapidfuzz import fuzz
+
+with st.tab("📘 رفع Excel (الاسم + اسم مركز الاقتراع)"):
+    st.subheader("📘 البحث الذكي باستخدام ملف Excel (الاسم + اسم مركز الاقتراع)")
     st.markdown("**يُفضّل أن يحتوي الملف على عمودين:** `الاسم` و `اسم مركز الاقتراع`.")
 
-    # ✅ تأكيد وجود دالة normalize_ar
-    try:
-        _ = normalize_ar
-    except NameError:
-        AR_DIACRITICS = str.maketrans('', '', ''.join([
-            '\u0610','\u0611','\u0612','\u0613','\u0614','\u0615','\u0616','\u0617','\u0618','\u0619','\u061A',
-            '\u064B','\u064C','\u064D','\u064E','\u064F','\u0650','\u0651','\u0652','\u0653','\u0654','\u0655',
-            '\u0656','\u0657','\u0658','\u0659','\u065A','\u065B','\u065C','\u065D','\u065E','\u065F','\u0670'
-        ]))
-        def normalize_ar(text: str) -> str:
-            if text is None:
-                return ""
-            s = str(text)
-            s = s.translate(AR_DIACRITICS)
-            s = s.replace("ـ", "").replace(" ", "").strip()
-            s = (s.replace("أ","ا").replace("إ","ا").replace("آ","ا")
-                   .replace("ى","ي").replace("ئ","ي")
-                   .replace("ؤ","و").replace("ة","ه"))
-            return s.lower()
+    # ✅ دالة التطبيع الذكي
+    import re
+    AR_DIACRITICS = str.maketrans('', '', ''.join([
+        '\u0610','\u0611','\u0612','\u0613','\u0614','\u0615','\u0616','\u0617','\u0618','\u0619','\u061A',
+        '\u064B','\u064C','\u064D','\u064E','\u064F','\u0650','\u0651','\u0652','\u0653','\u0654','\u0655',
+        '\u0656','\u0657','\u0658','\u0659','\u065A','\u065B','\u065C','\u065D','\u065E','\u065F','\u0670'
+    ]))
+    def normalize_ar(text: str) -> str:
+        if not text:
+            return ""
+        s = str(text)
+        s = s.translate(AR_DIACRITICS)
+        s = re.sub(r"[^\w\s]", "", s)
+        s = s.replace("ـ", "").replace(" ", "").strip()
+        s = (s.replace("أ","ا").replace("إ","ا").replace("آ","ا")
+             .replace("ؤ","و").replace("ئ","ي").replace("ى","ي").replace("ة","ه"))
+        return s.lower()
 
-    file_nc = st.file_uploader("📤 ارفع ملف Excel يحتوي الاسم + اسم مركز الاقتراع", type=["xlsx"], key="excel_name_center")
-    run_nc = st.button("🚀 تشغيل البحث (الاسم + اسم مركز الاقتراع)")
+    # ✅ دالة حساب التشابه
+    def similarity(a, b):
+        return fuzz.token_sort_ratio(normalize_ar(a), normalize_ar(b))
+
+    file_nc = st.file_uploader("📤 ارفع ملف Excel يحتوي الاسم + اسم مركز الاقتراع", type=["xlsx"], key="excel_name_center_smart")
+    run_nc = st.button("🚀 تشغيل البحث الذكي")
 
     if file_nc and run_nc:
         try:
@@ -419,7 +423,7 @@ with tab_file_name_center:
                 st.warning("⚠️ لا توجد مراكز صالحة في الملف.")
                 st.stop()
 
-            st.info(f"📦 عدد المراكز الفريدة: {len(unique_centers)}")
+            st.info(f"📦 عدد المراكز الفريدة في الملف: {len(unique_centers)}")
 
             conn = get_conn()
             all_dfs = []
@@ -449,7 +453,12 @@ with tab_file_name_center:
                     progress.progress((i + 1) / total_batches)
 
             finally:
-                conn.close()
+                try:
+                    conn.close()
+                    if "db_conn" in st.session_state:
+                        del st.session_state.db_conn
+                except:
+                    pass
 
             if not all_dfs:
                 st.warning("⚠️ لم يتم العثور على أي سجلات للمراكز.")
@@ -461,84 +470,66 @@ with tab_file_name_center:
             # التطبيع فقط للمقارنة
             db_df["__norm_name"] = db_df["الاسم الثلاثي"].apply(normalize_ar)
             db_df["__norm_center"] = db_df["اسم مركز الاقتراع"].apply(normalize_ar)
-
             xdf["__norm_name"] = xdf[name_col].apply(normalize_ar)
             xdf["__norm_center"] = xdf[center_col].apply(normalize_ar)
 
-            st.info("🔎 جاري المطابقة بين الأسماء...")
+            st.info("🔎 جاري تحليل ومطابقة الأسماء...")
 
-            matches, missing = [], []
+            results = []
             for _, row in xdf.iterrows():
-                nname = row["__norm_name"]
-                cname = row["__norm_center"]
+                in_name = row["__norm_name"]
+                in_center = row["__norm_center"]
+                orig_name = row[name_col]
+                orig_center = row[center_col]
 
-                matched_rows = db_df[
-                    (db_df["__norm_center"] == cname) &
-                    (db_df["__norm_name"] == nname)
-                ]
-                if not matched_rows.empty:
-                    matches.extend(matched_rows.to_dict("records"))
+                subset = db_df[db_df["__norm_center"] == in_center]
+                if subset.empty:
+                    results.append({
+                        "الاسم (من الملف)": orig_name,
+                        "اسم مركز الاقتراع (من الملف)": orig_center,
+                        "الاسم (من القاعدة)": "—",
+                        "درجة التطابق": 0,
+                        "الحالة": "❌ لم يُعثر عليه"
+                    })
+                    continue
+
+                # نختار أعلى درجة تشابه
+                subset["درجة التطابق"] = subset["__norm_name"].apply(lambda x: similarity(in_name, x))
+                best = subset.sort_values("درجة التطابق", ascending=False).iloc[0]
+
+                if best["درجة التطابق"] >= 85:
+                    results.append({
+                        "الاسم (من الملف)": orig_name,
+                        "اسم مركز الاقتراع (من الملف)": orig_center,
+                        "الاسم (من القاعدة)": best["الاسم الثلاثي"],
+                        "رقم الناخب": best["رقم الناخب"],
+                        "مركز الاقتراع": best["اسم مركز الاقتراع"],
+                        "درجة التطابق": round(best["درجة التطابق"], 2),
+                        "الحالة": "✅ مطابق جزئي/تام"
+                    })
                 else:
-                    missing.append({
-                        "الاسم (من الملف)": row[name_col],
-                        "اسم مركز الاقتراع (من الملف)": row[center_col]
+                    results.append({
+                        "الاسم (من الملف)": orig_name,
+                        "اسم مركز الاقتراع (من الملف)": orig_center,
+                        "الاسم (من القاعدة)": best["الاسم الثلاثي"],
+                        "درجة التطابق": round(best["درجة التطابق"], 2),
+                        "الحالة": "⚠️ تطابق ضعيف"
                     })
 
-            found_df = pd.DataFrame(matches)
+            res_df = pd.DataFrame(results)
+            res_df = res_df.sort_values("درجة التطابق", ascending=False)
+            st.dataframe(res_df, use_container_width=True, height=500)
 
-            if not found_df.empty:
-                out_df = found_df[[
-                    "رقم الناخب","الاسم الثلاثي","الجنس","هاتف","رقم العائلة",
-                    "اسم مركز الاقتراع","رقم مركز الاقتراع","تاريخ الميلاد",
-                    "المدينة","رقم مركز التسجيل","اسم مركز التسجيل"
-                ]].copy()
-
-                out_df = out_df.rename(columns={
-                    "الاسم الثلاثي": "الاسم",
-                    "هاتف": "رقم الهاتف",
-                    "اسم مركز الاقتراع": "مركز الاقتراع"
-                })
-                out_df["الجنس"] = out_df["الجنس"].apply(map_gender)
-                out_df["رقم المندوب الرئيسي"] = ""
-                out_df["الحالة"] = 0
-                out_df["ملاحظة"] = ""
-                out_df["رقم المحطة"] = 1
-
-                out_df = out_df[[
-                    "رقم الناخب","الاسم","الجنس","رقم الهاتف",
-                    "رقم العائلة","مركز الاقتراع","رقم مركز الاقتراع","رقم المحطة",
-                    "رقم المندوب الرئيسي","الحالة","ملاحظة"
-                ]]
-
-                st.success(f"✅ تم العثور على {len(out_df)} سجل مطابق.")
-                st.dataframe(out_df, use_container_width=True, height=450)
-
-                out_file = "نتائج_الاسم_ومركز.xlsx"
-                out_df.to_excel(out_file, index=False, engine="openpyxl")
-                wb = load_workbook(out_file)
-                wb.active.sheet_view.rightToLeft = True
-                wb.save(out_file)
-                with open(out_file, "rb") as f:
-                    st.download_button("⬇️ تحميل النتائج", f,
-                        file_name="نتائج_الاسم_ومركز.xlsx",
-                        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
-            else:
-                st.warning("⚠️ لم يتم العثور على أي تطابقات.")
-
-            # الأسماء غير الموجودة
-            if missing:
-                missing_df = pd.DataFrame(missing)
-                st.markdown("### ❌ غير موجودين في القاعدة")
-                st.dataframe(missing_df, use_container_width=True, height=300)
-
-                miss_file = "غير_موجودين_اسم_ومركز.xlsx"
-                missing_df.to_excel(miss_file, index=False, engine="openpyxl")
-                with open(miss_file, "rb") as f:
-                    st.download_button("⬇️ تحميل غير الموجودين", f,
-                        file_name="غير_موجودين_اسم_ومركز.xlsx",
-                        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
-            else:
-                st.success("✅ كل الأسماء وُجدت في القاعدة.")
+            # تحميل النتائج
+            out_file = "نتائج_الاسم_ومركز_ذكي.xlsx"
+            res_df.to_excel(out_file, index=False, engine="openpyxl")
+            wb = load_workbook(out_file)
+            wb.active.sheet_view.rightToLeft = True
+            wb.save(out_file)
+            with open(out_file, "rb") as f:
+                st.download_button("⬇️ تحميل النتائج التفصيلية", f,
+                    file_name="نتائج_الاسم_ومركز_ذكي.xlsx",
+                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
 
         except Exception as e:
             st.error(f"❌ خطأ أثناء تنفيذ البحث: {e}")
