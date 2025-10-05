@@ -20,7 +20,7 @@ load_dotenv()
 USERNAME = "admin"
 PASSWORD = "Moraqip@123"
 
-st.set_page_config(page_title="بيانات بابل", layout="wide")
+st.set_page_config(page_title="المراقب الذكي", layout="wide")
 
 # ---- إعداد Google Vision من secrets ----
 def setup_google_vision():
@@ -53,19 +53,70 @@ def map_gender(x):
         return "F" if val == 1 else "M"
     except:
         return "M"
-
+# ---- تسجيل الدخول ----
 # ---- تسجيل الدخول ----
 def login():
-    st.markdown("## 🔑 تسجيل الدخول")
-    u = st.text_input("👤 اسم المستخدم")
-    p = st.text_input("🔒 كلمة المرور", type="password")
-    if st.button("دخول"):
+    st.markdown(
+        """
+        <style>
+        .login-container {
+            display: flex;
+            justify-content: center;
+            align-items: flex-start; /* يرفع الصندوق لفوق */
+            height: 100vh;
+            padding-top: 10vh;       /* مسافة من فوق */
+        }
+        .login-box {
+            background: #ffffff;
+            padding: 1.5rem 2rem;
+            border-radius: 12px;
+            box-shadow: 0px 2px 12px rgba(0,0,0,0.1);
+            text-align: center;
+            width: 300px;
+        }
+        .stTextInput>div>div>input {
+            text-align: center;
+            font-size: 14px;
+            height: 35px;
+        }
+        .stButton button {
+            background: linear-gradient(90deg, #4e73df, #1cc88a);
+            color: white;
+            border-radius: 6px;
+            padding: 0.4rem 0.8rem;
+            font-size: 14px;
+            font-weight: bold;
+            transition: 0.2s;
+            width: 100%;
+        }
+        .stButton button:hover {
+            background: linear-gradient(90deg, #1cc88a, #4e73df);
+            transform: scale(1.02);
+        }
+        </style>
+        """,
+        unsafe_allow_html=True
+    )
+
+    st.markdown('<div class="login-container"><div class="login-box">', unsafe_allow_html=True)
+
+    st.markdown("### 🔑 تسجيل الدخول")
+    u = st.text_input("👤 اسم المستخدم", key="login_user")
+    p = st.text_input("🔒 كلمة المرور", type="password", key="login_pass")
+
+    # ✅ كبسة واحدة تكفي
+    login_btn = st.button("🚀 دخول", key="login_btn")
+    if login_btn:
         if u == USERNAME and p == PASSWORD:
             st.session_state.logged_in = True
-            st.success("✅ تسجيل الدخول ناجح")
+            st.rerun()   # إعادة تحميل الصفحة مباشرة
         else:
             st.error("❌ اسم المستخدم أو كلمة المرور غير صحيحة")
 
+    st.markdown('</div></div>', unsafe_allow_html=True)
+
+
+# ---- تحقق من حالة الجلسة ----
 if "logged_in" not in st.session_state:
     st.session_state.logged_in = False
 
@@ -74,12 +125,12 @@ if not st.session_state.logged_in:
     st.stop()
 
 # ========================== الواجهة بعد تسجيل الدخول ==========================
-st.title("📊 بيانات بابل - البحث في سجلات الناخبين")
+st.title("📊 بغداد - البحث في سجلات الناخبين")
 st.markdown("سيتم البحث في قواعد البيانات باستخدام الذكاء الاصطناعي 🤖")
 
 # ====== تبويبات ======
-tab_browse, tab_single, tab_file, tab_ocr, tab_count = st.tabs(
-    ["📄 تصفّح السجلات", "🔍 بحث برقم", "📂 رفع ملف Excel", "📸 OCR صور بطاقات", "📦 عدّ البطاقات"]
+tab_browse, tab_single, tab_file, tab_count = st.tabs(
+    ["📄 تصفّح السجلات", "🔍 بحث برقم", "📂 رفع ملف Excel", "📦 عدّ البطاقات"]
 )
 # ----------------------------------------------------------------------------- #
 # 1) 📄 تصفّح السجلات
@@ -124,14 +175,14 @@ with tab_browse:
 
     where_sql = f"WHERE {' AND '.join(where_clauses)}" if where_clauses else ""
 
-    count_sql = f'SELECT COUNT(*) FROM "Babil" {where_sql};'
+    count_sql = f'SELECT COUNT(*) FROM "Bagdad" {where_sql};'
     offset = (st.session_state.page - 1) * page_size
     data_sql = f'''
         SELECT
             "رقم الناخب","الاسم الثلاثي","الجنس","هاتف","رقم العائلة",
             "اسم مركز الاقتراع","رقم مركز الاقتراع",
             "المدينة","رقم مركز التسجيل","اسم مركز التسجيل","تاريخ الميلاد"
-        FROM "Babil"
+        FROM "Bagdad"
         {where_sql}
         ORDER BY "رقم الناخب" ASC
         LIMIT %s OFFSET %s;
@@ -194,7 +245,7 @@ with tab_single:
                 SELECT "رقم الناخب","الاسم الثلاثي","الجنس","هاتف","رقم العائلة",
                        "اسم مركز الاقتراع","رقم مركز الاقتراع",
                        "المدينة","رقم مركز التسجيل","اسم مركز التسجيل","تاريخ الميلاد"
-                FROM "Babil" WHERE "رقم الناخب" LIKE %s
+                FROM "Bagdad" WHERE "رقم الناخب" LIKE %s
             """
             df = pd.read_sql_query(query, conn, params=(voter_input.strip(),))
             conn.close()
@@ -238,7 +289,7 @@ with tab_file:
                 SELECT "رقم الناخب","الاسم الثلاثي","الجنس","هاتف","رقم العائلة",
                        "اسم مركز الاقتراع","رقم مركز الاقتراع",
                        "المدينة","رقم مركز التسجيل","اسم مركز التسجيل","تاريخ الميلاد"
-                FROM "Babil" WHERE "رقم الناخب" IN ({placeholders})
+                FROM "Bagdad" WHERE "رقم الناخب" IN ({placeholders})
             """
             df = pd.read_sql_query(query, conn, params=voters_list)
             conn.close()
@@ -262,10 +313,10 @@ with tab_file:
                 df["رقم المندوب الرئيسي"] = ""
                 df["الحالة"] = 0
                 df["ملاحظة"] = ""
+                df["رقم المحطة"] = 1
 
                 df = df[["رقم الناخب","الاسم","الجنس","رقم الهاتف",
-                         "رقم العائلة","مركز الاقتراع","رقم مركز الاقتراع",
-                         "المدينة","رقم مركز التسجيل","اسم مركز التسجيل","تاريخ الميلاد",
+                         "رقم العائلة","مركز الاقتراع","رقم مركز الاقتراع","رقم المحطة",
                          "رقم المندوب الرئيسي","الحالة","ملاحظة"]]
 
                 # ✅ إيجاد الأرقام غير الموجودة
@@ -303,175 +354,7 @@ with tab_file:
                 st.warning("⚠️ لا يوجد نتائج")
         except Exception as e:
             st.error(f"❌ خطأ: {e}")
-# ----------------------------------------------------------------------------- #
-# 4) 📸 OCR صور بطاقات
-# ----------------------------------------------------------------------------- #
-with tab_ocr:
-    st.subheader("📸 استخراج رقم الناخب من الصور")
-
-    # ---- قسم: استخراج الأرقام فقط (بدون البحث) ----
-    st.markdown("### 🔎 استخراج الأرقام فقط (بدون البحث في قاعدة البيانات)")
-    imgs_only = st.file_uploader(
-        "📤 ارفع صور البطاقات (لاستخراج الأرقام فقط)",
-        type=["jpg","jpeg","png"],
-        accept_multiple_files=True,
-        key="ocr_only"
-    )
-    if imgs_only and st.button("🚀 استخراج الأرقام فقط"):
-        client = setup_google_vision()
-        if client is None:
-            st.error("❌ خطأ في إعداد Google Vision.")
-        else:
-            clear_numbers, unclear_candidates, results = [], [], []
-
-            for img in imgs_only:
-                try:
-                    content = img.read()
-                    image = vision.Image(content=content)
-                    response = client.text_detection(image=image)
-                    texts = response.text_annotations
-                    if texts:
-                        full_text = texts[0].description
-                        found_clear = re.findall(r"\b\d{6,10}\b", full_text)
-
-                        if found_clear:
-                            clear_numbers.extend(found_clear)
-                            results.append({"filename": img.name, "content": img, "numbers": found_clear})
-
-                        raw_candidates = re.findall(r"[0-9][0-9\-\s]{4,12}[0-9]", full_text)
-                        for cand in raw_candidates:
-                            if cand not in found_clear:
-                                cleaned = re.sub(r"\D", "", cand)
-                                if 6 <= len(cleaned) <= 10:
-                                    unclear_candidates.append({"original": cand, "cleaned": cleaned})
-                except Exception as e:
-                    st.warning(f"⚠️ خطأ أثناء معالجة صورة: {e}")
-
-            # ✅ تنظيف النتائج
-            clear_numbers = list(dict.fromkeys(clear_numbers))
-            seen_cleaned, uniq_unclear = set(), []
-            for item in unclear_candidates:
-                if item["cleaned"] not in seen_cleaned and item["cleaned"] not in clear_numbers:
-                    seen_cleaned.add(item["cleaned"])
-                    uniq_unclear.append(item)
-
-            if results:
-                st.markdown("### 🖼️ الصور التي تحتوي أرقام ناخب (مرفقة ✅):")
-                for r in results:
-                    numbers_str = ", ".join(r["numbers"])
-                    st.image(r["content"], caption=f"{r['filename']} — الأرقام: {numbers_str}", use_column_width=True)
-
-            st.success("✅ الانتهاء من الاستخراج")
-            st.metric("الأرقام الواضحة المكتشفة", len(clear_numbers))
-            st.metric("الأرقام المشكوك فيها (غير واضحة)", len(uniq_unclear))
-
-            if clear_numbers:
-                clear_df = pd.DataFrame(clear_numbers, columns=["الأرقام الواضحة"])
-                clear_file = "clear_numbers.xlsx"
-                clear_df.to_excel(clear_file, index=False, engine="openpyxl")
-                with open(clear_file, "rb") as f:
-                    st.download_button("⬇️ تحميل الأرقام الواضحة", f,
-                        file_name="الأرقام_الواضحة.xlsx",
-                        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
-
-            if uniq_unclear:
-                unclear_df = pd.DataFrame(uniq_unclear)
-                unclear_file = "unclear_numbers.xlsx"
-                unclear_df.to_excel(unclear_file, index=False, engine="openpyxl")
-                with open(unclear_file, "rb") as f:
-                    st.download_button("⬇️ تحميل الأرقام المشكوك فيها", f,
-                        file_name="الأرقام_المشكوك_فيها.xlsx",
-                        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
-
-    st.markdown("---")
-
-    # ---- قسم: استخراج + البحث في قاعدة البيانات ----
-    imgs = st.file_uploader(
-        "📤 ارفع صور البطاقات (للاستخراج والبحث في قاعدة البيانات)",
-        type=["jpg","jpeg","png"],
-        accept_multiple_files=True,
-        key="ocr_search"
-    )
-    if imgs and st.button("🚀 استخراج والبحث"):
-        client = setup_google_vision()
-        if client is None:
-            st.error("❌ لم يتم تحميل مفتاح Google Vision بشكل صحيح.")
-        else:
-            all_voters, results = [], []
-            for img in imgs:
-                try:
-                    content = img.read()
-                    image = vision.Image(content=content)
-                    response = client.text_detection(image=image)
-                    texts = response.text_annotations
-                    if texts:
-                        numbers = re.findall(r"\b\d{6,10}\b", texts[0].description)
-                        if numbers:
-                            all_voters.extend(numbers)
-                            results.append({"filename": img.name, "content": img, "numbers": numbers})
-                except Exception as e:
-                    st.warning(f"⚠️ خطأ أثناء معالجة صورة: {e}")
-
-            if results:
-                st.markdown("### 🖼️ الصور التي تحتوي أرقام ناخب:")
-                for r in results:
-                    st.image(r["content"], caption=f"{r['filename']} — الأرقام: {', '.join(r['numbers'])}", use_column_width=True)
-
-            if all_voters:
-                try:
-                    conn = get_conn()
-                    placeholders = ",".join(["%s"] * len(all_voters))
-                    query = f"""
-                        SELECT "رقم الناخب","الاسم الثلاثي","الجنس","هاتف","رقم العائلة",
-                               "اسم مركز الاقتراع","رقم مركز الاقتراع",
-                               "المدينة","رقم مركز التسجيل","اسم مركز التسجيل","تاريخ الميلاد"
-                        FROM "Babil" WHERE "رقم الناخب" IN ({placeholders})
-                    """
-                    df = pd.read_sql_query(query, conn, params=all_voters)
-                    conn.close()
-
-                    if not df.empty:
-                        df = df.rename(columns={
-                            "رقم الناخب": "رقم الناخب",
-                            "الاسم الثلاثي": "الاسم",
-                            "الجنس": "الجنس",
-                            "هاتف": "رقم الهاتف",
-                            "رقم العائلة": "رقم العائلة",
-                            "اسم مركز الاقتراع": "مركز الاقتراع",
-                            "رقم مركز الاقتراع": "رقم مركز الاقتراع",
-                            "المدينة": "المدينة",
-                            "رقم مركز التسجيل": "رقم مركز التسجيل",
-                            "اسم مركز التسجيل": "اسم مركز التسجيل",
-                            "تاريخ الميلاد": "تاريخ الميلاد"
-                        })
-                        df["الجنس"] = df["الجنس"].apply(map_gender)
-
-                        df["رقم المندوب الرئيسي"] = ""
-                        df["الحالة"] = 0
-                        df["ملاحظة"] = ""
-
-                        df = df[["رقم الناخب","الاسم","الجنس","رقم الهاتف",
-                                 "رقم العائلة","مركز الاقتراع","رقم مركز الاقتراع",
-                                 "المدينة","رقم مركز التسجيل","اسم مركز التسجيل","تاريخ الميلاد",
-                                 "رقم المندوب الرئيسي","الحالة","ملاحظة"]]
-
-                        st.dataframe(df, use_container_width=True, height=500)
-
-                        output_file = "ocr_نتائج_البحث.xlsx"
-                        df.to_excel(output_file, index=False, engine="openpyxl")
-                        wb = load_workbook(output_file)
-                        wb.active.sheet_view.rightToLeft = True
-                        wb.save(output_file)
-                        with open(output_file, "rb") as f:
-                            st.download_button("⬇️ تحميل النتائج OCR", f,
-                                file_name="ocr_نتائج_البحث.xlsx",
-                                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
-                    else:
-                        st.warning("⚠️ لم يتم العثور على نتائج")
-                except Exception as e:
-                    st.error(f"❌ خطأ أثناء البحث في قاعدة البيانات: {e}")
-            else:
-                st.warning("⚠️ لم يتعرّف على أي أرقام في الصور")
+     
 # ----------------------------------------------------------------------------- #
 # 5) 📦 عدّ البطاقات (أرقام 8 خانات) + بحث في القاعدة + قائمة الأرقام غير الموجودة
 # ----------------------------------------------------------------------------- #
@@ -531,7 +414,7 @@ with tab_count:
                         SELECT "رقم الناخب","الاسم الثلاثي","الجنس","هاتف","رقم العائلة",
                                "اسم مركز الاقتراع","رقم مركز الاقتراع",
                                "المدينة","رقم مركز التسجيل","اسم مركز التسجيل","تاريخ الميلاد"
-                        FROM "Babil" WHERE "رقم الناخب" IN ({placeholders})
+                        FROM "Bagdad" WHERE "رقم الناخب" IN ({placeholders})
                     """
                     found_df = pd.read_sql_query(query, conn, params=unique_numbers)
                     conn.close()
