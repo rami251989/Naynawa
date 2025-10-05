@@ -7,3 +7,4 @@ google-cloud-vision
 opencv-python-headless
 numpy
 Pillow
+rapidfuzz==3.9.0
