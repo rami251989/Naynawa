@@ -356,16 +356,15 @@ with tab_file:
         except Exception as e:
             st.error(f"❌ خطأ: {e}")
      
-
 # ----------------------------------------------------------------------------- #
-# 4) 📥 رفع Excel (اسم + رقم مركز) — بحث أدق بالعربية دون تغيير البيانات الأصلية
+# 4) 📥 رفع Excel (الاسم + اسم مركز الاقتراع) — بحث أدق بالعربية دون تغيير البيانات الأصلية
 # ----------------------------------------------------------------------------- #
 with tab_file_name_center:
-    st.subheader("📥 البحث باستخدام ملف Excel (الاسم + رقم مركز الاقتراع)")
-    st.markdown("**يُفضّل أن يحتوي الملف على عمودين:** `الاسم` أو `الاسم الثلاثي` و`رقم مركز الاقتراع`.")
+    st.subheader("📥 البحث باستخدام ملف Excel (الاسم + اسم مركز الاقتراع)")
+    st.markdown("**يُفضّل أن يحتوي الملف على عمودين:** `الاسم` أو `الاسم الثلاثي` و`اسم مركز الاقتراع`.")
 
-    file_nc = st.file_uploader("📤 ارفع ملف Excel يحتوي الاسم + رقم مركز الاقتراع", type=["xlsx"], key="excel_name_center")
-    run_nc = st.button("🚀 تشغيل البحث (اسم + رقم مركز)")
+    file_nc = st.file_uploader("📤 ارفع ملف Excel يحتوي الاسم + اسم مركز الاقتراع", type=["xlsx"], key="excel_name_center")
+    run_nc = st.button("🚀 تشغيل البحث (اسم + اسم مركز الاقتراع)")
 
     if file_nc and run_nc:
         try:
@@ -373,9 +372,9 @@ with tab_file_name_center:
             xdf = pd.read_excel(file_nc, engine="openpyxl")
             xdf_columns_lower = {c.strip().lower(): c for c in xdf.columns}
 
-            # البحث عن أسماء الأعمدة
+            # أسماء الأعمدة الممكنة
             name_col_candidates = ["الاسم", "الاسم الثلاثي", "name", "full name", "fullname"]
-            center_no_candidates = ["رقم مركز الاقتراع", "رقم المركز", "pollingcenterno", "center_no", "center number"]
+            center_name_candidates = ["اسم مركز الاقتراع", "مركز الاقتراع", "polling center name", "center name"]
 
             def pick_col(cands):
                 for c in cands:
@@ -385,15 +384,15 @@ with tab_file_name_center:
                 return None
 
             name_col = pick_col(name_col_candidates)
-            center_no_col = pick_col(center_no_candidates)
+            center_name_col = pick_col(center_name_candidates)
 
-            if not name_col or not center_no_col:
-                st.error("❌ لم يتم العثور على الأعمدة المطلوبة. تأكد من وجود عمود للاسم وآخر لرقم مركز الاقتراع.")
+            if not name_col or not center_name_col:
+                st.error("❌ لم يتم العثور على الأعمدة المطلوبة. تأكد من وجود عمود للاسم وآخر لاسم مركز الاقتراع.")
                 st.stop()
 
-            # 2️⃣ تجهيز قائمة أرقام المراكز
+            # 2️⃣ تجهيز قائمة أسماء المراكز
             centers_list = (
-                xdf[center_no_col]
+                xdf[center_name_col]
                 .dropna()
                 .astype(str)
                 .str.strip()
@@ -401,7 +400,7 @@ with tab_file_name_center:
             )
             unique_centers = sorted(list(set(centers_list)))
             if not unique_centers:
-                st.warning("⚠️ لا توجد أرقام مراكز صالحة في الملف.")
+                st.warning("⚠️ لا توجد أسماء مراكز صالحة في الملف.")
                 st.stop()
 
             # 3️⃣ استعلام قاعدة البيانات لجلب السجلات ضمن هذه المراكز فقط
@@ -413,7 +412,7 @@ with tab_file_name_center:
                     "اسم مركز الاقتراع","رقم مركز الاقتراع",
                     "المدينة","رقم مركز التسجيل","اسم مركز التسجيل","تاريخ الميلاد"
                 FROM "naynawa"
-                WHERE CAST("رقم مركز الاقتراع" AS TEXT) IN ({placeholders})
+                WHERE "اسم مركز الاقتراع" IN ({placeholders})
             """
             db_df = pd.read_sql_query(query, conn, params=unique_centers)
             conn.close()
@@ -422,21 +421,21 @@ with tab_file_name_center:
                 st.warning("⚠️ لم يتم العثور على أي سجلات لتلك المراكز في القاعدة.")
                 st.stop()
 
-            # 4️⃣ تطبيع الأسماء فقط لأجل المقارنة (لا نغيّر الأصل)
+            # 4️⃣ تطبيع الأسماء فقط للمقارنة (البيانات الأصلية لا تتغيّر)
             db_df["__norm_name"] = db_df["الاسم الثلاثي"].apply(normalize_ar)
-            db_df["__center_no_str"] = db_df["رقم مركز الاقتراع"].astype(str).str.strip()
+            db_df["__norm_center"] = db_df["اسم مركز الاقتراع"].apply(normalize_ar)
 
             xdf["__norm_name"] = xdf[name_col].apply(normalize_ar)
-            xdf["__center_no_str"] = xdf[center_no_col].astype(str).str.strip()
+            xdf["__norm_center"] = xdf[center_name_col].apply(normalize_ar)
 
-            # 5️⃣ مطابقة دقيقة: الاسم + رقم المركز
+            # 5️⃣ مطابقة دقيقة: الاسم + اسم المركز (بعد التطبيع)
             matches = []
             for _, row in xdf.iterrows():
                 nname = row["__norm_name"]
-                cno = row["__center_no_str"]
+                cname = row["__norm_center"]
 
                 matched_rows = db_df[
-                    (db_df["__center_no_str"] == cno) &
+                    (db_df["__norm_center"] == cname) &
                     (db_df["__norm_name"] == nname)
                 ]
                 if not matched_rows.empty:
@@ -445,7 +444,7 @@ with tab_file_name_center:
 
             found_df = pd.DataFrame(matches)
 
-            # 6️⃣ تجهيز النتائج النهائية كما في تبويب رفع الأرقام (دون أي تغيير نصي)
+            # 6️⃣ تجهيز النتائج النهائية كما في تبويب رفع الأرقام
             if not found_df.empty:
                 out_df = found_df[[
                     "رقم الناخب","الاسم الثلاثي","الجنس","هاتف","رقم العائلة",
@@ -468,7 +467,7 @@ with tab_file_name_center:
                 })
                 out_df["الجنس"] = out_df["الجنس"].apply(map_gender)
 
-                # نفس الأعمدة الإضافية
+                # نفس الأعمدة الإضافية لتصدير النتائج
                 out_df["رقم المندوب الرئيسي"] = ""
                 out_df["الحالة"] = 0
                 out_df["ملاحظة"] = ""
@@ -484,27 +483,27 @@ with tab_file_name_center:
                 st.dataframe(out_df, use_container_width=True, height=450)
 
                 # حفظ وتنزيل النتائج
-                out_file = "نتائج_الاسم_ورقم_المركز.xlsx"
+                out_file = "نتائج_الاسم_واسم_المركز.xlsx"
                 out_df.to_excel(out_file, index=False, engine="openpyxl")
                 wb = load_workbook(out_file)
                 wb.active.sheet_view.rightToLeft = True
                 wb.save(out_file)
                 with open(out_file, "rb") as f:
                     st.download_button("⬇️ تحميل النتائج", f,
-                        file_name="نتائج_الاسم_ورقم_المركز.xlsx",
+                        file_name="نتائج_الاسم_واسم_المركز.xlsx",
                         mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
             else:
                 st.warning("⚠️ لا توجد نتائج مطابقة.")
 
-            # 7️⃣ غير الموجودين
-            found_keys = set(zip(db_df["__center_no_str"], db_df["__norm_name"]))
+            # 7️⃣ تحديد غير الموجودين
+            found_keys = set(zip(db_df["__norm_center"], db_df["__norm_name"]))
             missing = []
             for _, row in xdf.iterrows():
-                key = (row["__center_no_str"], row["__norm_name"])
+                key = (row["__norm_center"], row["__norm_name"])
                 if key not in found_keys:
                     missing.append({
                         "الاسم (من الملف)": row[name_col],
-                        "رقم مركز الاقتراع (من الملف)": row[center_no_col]
+                        "اسم مركز الاقتراع (من الملف)": row[center_name_col]
                     })
 
             if missing:
@@ -524,7 +523,6 @@ with tab_file_name_center:
         except Exception as e:
             st.error(f"❌ خطأ أثناء تنفيذ البحث: {e}")
 
-     
 # ----------------------------------------------------------------------------- #
 # 5) 📦 عدّ البطاقات (أرقام 8 خانات) + بحث في القاعدة + قائمة الأرقام غير الموجودة
 # ----------------------------------------------------------------------------- #
