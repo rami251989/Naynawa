@@ -355,17 +355,16 @@ with tab_file:
                 st.warning("⚠️ لا يوجد نتائج")
         except Exception as e:
             st.error(f"❌ خطأ: {e}")
-     
-# ----------------------------------------------------------------------------- #
-# 4) 📥 رفع Excel (الاسم + اسم مركز الاقتراع) — محسّن وسريع (بحث على دفعات)
+ # ----------------------------------------------------------------------------- #
+# 4) 📥 رفع Excel (الاسم + اسم مركز الاقتراع) — نسخة محسّنة ومستقرة
 # ----------------------------------------------------------------------------- #
 with tab_file_name_center:
     st.subheader("📥 البحث باستخدام ملف Excel (الاسم + اسم مركز الاقتراع)")
-    st.markdown("**يفضّل أن يحتوي الملف على عمودين:** `الاسم` أو `الاسم الثلاثي` و`اسم مركز الاقتراع`.")
+    st.markdown("**يُفضّل أن يحتوي الملف على عمودين:** `الاسم` و `اسم مركز الاقتراع`.")
 
     # ✅ تأكيد وجود دالة normalize_ar
     try:
-        normalize_ar
+        _ = normalize_ar
     except NameError:
         AR_DIACRITICS = str.maketrans('', '', ''.join([
             '\u0610','\u0611','\u0612','\u0613','\u0614','\u0615','\u0616','\u0617','\u0618','\u0619','\u061A',
@@ -388,15 +387,15 @@ with tab_file_name_center:
 
     if file_nc and run_nc:
         try:
-            # 1️⃣ قراءة الملف
+            st.info("⏳ جاري قراءة الملف...")
             xdf = pd.read_excel(file_nc, engine="openpyxl")
 
-            # تنظيف أسماء الأعمدة من الرموز/المسافات
+            # تنظيف أسماء الأعمدة
             def clean_col_name(c):
                 return str(c).replace("\u200f", "").replace("\u200e", "").strip().lower()
             cleaned_cols = {clean_col_name(c): c for c in xdf.columns}
 
-            name_col_candidates = ["الاسم", "الاسم الثلاثي", "name", "full name", "fullname"]
+            name_col_candidates = ["الاسم", "الاسم الثلاثي", "name", "full name"]
             center_col_candidates = ["اسم مركز الاقتراع", "مركز الاقتراع", "polling center name", "center name"]
 
             def pick_col(cands):
@@ -412,57 +411,63 @@ with tab_file_name_center:
                 st.error("❌ لم يتم العثور على الأعمدة المطلوبة. تأكد من وجود عمود للاسم وآخر لاسم مركز الاقتراع.")
                 st.stop()
 
-            # 2️⃣ تجهيز قائمة المراكز
             centers_list = (
                 xdf[center_col].dropna().astype(str).str.strip().tolist()
             )
             unique_centers = sorted(list(set(centers_list)))
             if not unique_centers:
-                st.warning("⚠️ لا توجد أسماء مراكز صالحة في الملف.")
+                st.warning("⚠️ لا توجد مراكز صالحة في الملف.")
                 st.stop()
 
-            # 3️⃣ تحميل البيانات على دفعات (Batch)
+            st.info(f"📦 عدد المراكز الفريدة: {len(unique_centers)}")
+
             conn = get_conn()
-            batch_size = 100
-            all_batches = [unique_centers[i:i+batch_size] for i in range(0, len(unique_centers), batch_size)]
             all_dfs = []
+            batch_size = 100
+            total_batches = (len(unique_centers) + batch_size - 1) // batch_size
+
             progress = st.progress(0)
-            total_batches = len(all_batches)
+            status = st.empty()
 
-            for i, batch in enumerate(all_batches):
-                placeholders = ",".join(["%s"] * len(batch))
-                query = f"""
-                    SELECT
-                        "رقم الناخب","الاسم الثلاثي","الجنس","هاتف","رقم العائلة",
-                        "اسم مركز الاقتراع","رقم مركز الاقتراع",
-                        "المدينة","رقم مركز التسجيل","اسم مركز التسجيل","تاريخ الميلاد"
-                    FROM "naynawa"
-                    WHERE "اسم مركز الاقتراع" IN ({placeholders})
-                """
-                df_part = pd.read_sql_query(query, conn, params=batch)
-                if not df_part.empty:
-                    all_dfs.append(df_part)
-                progress.progress((i + 1) / total_batches)
+            try:
+                for i in range(total_batches):
+                    batch = unique_centers[i * batch_size : (i + 1) * batch_size]
+                    status.text(f"🔍 تحميل الدفعة {i+1}/{total_batches} ...")
 
-            conn.close()
+                    query = """
+                        SELECT
+                            "رقم الناخب","الاسم الثلاثي","الجنس","هاتف","رقم العائلة",
+                            "اسم مركز الاقتراع","رقم مركز الاقتراع",
+                            "المدينة","رقم مركز التسجيل","اسم مركز التسجيل","تاريخ الميلاد"
+                        FROM "naynawa"
+                        WHERE "اسم مركز الاقتراع" = ANY(%s)
+                    """
+                    df_part = pd.read_sql_query(query, conn, params=(batch,))
+                    if not df_part.empty:
+                        all_dfs.append(df_part)
+
+                    progress.progress((i + 1) / total_batches)
+
+            finally:
+                conn.close()
 
             if not all_dfs:
-                st.warning("⚠️ لم يتم العثور على أي سجلات للمراكز الموجودة في الملف.")
+                st.warning("⚠️ لم يتم العثور على أي سجلات للمراكز.")
                 st.stop()
 
             db_df = pd.concat(all_dfs, ignore_index=True)
+            st.success(f"✅ تم تحميل {len(db_df)} سجل من قاعدة البيانات.")
 
-            # 4️⃣ التطبيع للمقارنة فقط
+            # التطبيع فقط للمقارنة
             db_df["__norm_name"] = db_df["الاسم الثلاثي"].apply(normalize_ar)
             db_df["__norm_center"] = db_df["اسم مركز الاقتراع"].apply(normalize_ar)
 
             xdf["__norm_name"] = xdf[name_col].apply(normalize_ar)
             xdf["__norm_center"] = xdf[center_col].apply(normalize_ar)
 
-            # 5️⃣ البحث والمطابقة
-            matches = []
-            missing = []
-            st.info("🔍 جاري المطابقة بين الأسماء والمراكز...")
+            st.info("🔎 جاري المطابقة بين الأسماء...")
+
+            matches, missing = [], []
             for _, row in xdf.iterrows():
                 nname = row["__norm_name"]
                 cname = row["__norm_center"]
@@ -472,8 +477,7 @@ with tab_file_name_center:
                     (db_df["__norm_name"] == nname)
                 ]
                 if not matched_rows.empty:
-                    for _, r in matched_rows.iterrows():
-                        matches.append(r)
+                    matches.extend(matched_rows.to_dict("records"))
                 else:
                     missing.append({
                         "الاسم (من الملف)": row[name_col],
@@ -482,7 +486,6 @@ with tab_file_name_center:
 
             found_df = pd.DataFrame(matches)
 
-            # 6️⃣ عرض النتائج
             if not found_df.empty:
                 out_df = found_df[[
                     "رقم الناخب","الاسم الثلاثي","الجنس","هاتف","رقم العائلة",
@@ -510,19 +513,19 @@ with tab_file_name_center:
                 st.success(f"✅ تم العثور على {len(out_df)} سجل مطابق.")
                 st.dataframe(out_df, use_container_width=True, height=450)
 
-                out_file = "نتائج_الاسم_واسم_المركز.xlsx"
+                out_file = "نتائج_الاسم_ومركز.xlsx"
                 out_df.to_excel(out_file, index=False, engine="openpyxl")
                 wb = load_workbook(out_file)
                 wb.active.sheet_view.rightToLeft = True
                 wb.save(out_file)
                 with open(out_file, "rb") as f:
                     st.download_button("⬇️ تحميل النتائج", f,
-                        file_name="نتائج_الاسم_واسم_المركز.xlsx",
+                        file_name="نتائج_الاسم_ومركز.xlsx",
                         mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
             else:
                 st.warning("⚠️ لم يتم العثور على أي تطابقات.")
 
-            # 7️⃣ الأسماء غير الموجودة
+            # الأسماء غير الموجودة
             if missing:
                 missing_df = pd.DataFrame(missing)
                 st.markdown("### ❌ غير موجودين في القاعدة")
@@ -535,7 +538,7 @@ with tab_file_name_center:
                         file_name="غير_موجودين_اسم_ومركز.xlsx",
                         mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
             else:
-                st.success("✅ لا توجد حالات مفقودة — كل الأسماء وُجدت في مراكزها.")
+                st.success("✅ كل الأسماء وُجدت في القاعدة.")
 
         except Exception as e:
             st.error(f"❌ خطأ أثناء تنفيذ البحث: {e}")
