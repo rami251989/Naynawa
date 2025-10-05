@@ -364,23 +364,28 @@ with tab_file_name_center:
     st.markdown("**يُفضّل أن يحتوي الملف على عمودين:** `الاسم` أو `الاسم الثلاثي` و`اسم مركز الاقتراع`.")
 
     file_nc = st.file_uploader("📤 ارفع ملف Excel يحتوي الاسم + اسم مركز الاقتراع", type=["xlsx"], key="excel_name_center")
-    run_nc = st.button("🚀 تشغيل البحث (اسم + اسم مركز الاقتراع)")
+    run_nc = st.button("🚀 تشغيل البحث (الاسم + اسم مركز الاقتراع)")
 
     if file_nc and run_nc:
         try:
             # 1️⃣ قراءة الملف
             xdf = pd.read_excel(file_nc, engine="openpyxl")
-            xdf_columns_lower = {c.strip().lower(): c for c in xdf.columns}
+
+            # تنظيف أسماء الأعمدة من الرموز والمسافات الخفية
+            def clean_col_name(c):
+                return str(c).replace("\u200f", "").replace("\u200e", "").strip().lower()
+
+            cleaned_cols = {clean_col_name(c): c for c in xdf.columns}
 
             # أسماء الأعمدة الممكنة
             name_col_candidates = ["الاسم", "الاسم الثلاثي", "name", "full name", "fullname"]
             center_name_candidates = ["اسم مركز الاقتراع", "مركز الاقتراع", "polling center name", "center name"]
 
+            # دالة اختيار العمود الصحيح
             def pick_col(cands):
                 for c in cands:
-                    cl = c.strip().lower()
-                    if cl in xdf_columns_lower:
-                        return xdf_columns_lower[cl]
+                    if clean_col_name(c) in cleaned_cols:
+                        return cleaned_cols[clean_col_name(c)]
                 return None
 
             name_col = pick_col(name_col_candidates)
