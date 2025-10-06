@@ -355,24 +355,24 @@ with tab_file:
                 st.warning("⚠️ لا يوجد نتائج")
         except Exception as e:
             st.error(f"❌ خطأ: {e}")
-            
+
 # ----------------------------------------------------------------------------- #
-# 4) 📘 رفع Excel (الاسم + اسم مركز الاقتراع) — نسخة سريعة وذكية مع شريط تقدم مفصل
+# 4) 📘 رفع Excel (الاسم + اسم مركز الاقتراع) — نسخة نهائية محسنة
 # ----------------------------------------------------------------------------- #
-from rapidfuzz import fuzz, process
-import time
+from rapidfuzz import process, fuzz
+import re
 
 with tab_file_name_center:
-    st.subheader("📘 البحث الذكي والسريع باستخدام ملف Excel (الاسم + اسم مركز الاقتراع)")
-    st.markdown("**يُفضّل أن يحتوي الملف على عمودين:** `الاسم` و `اسم مركز الاقتراع`.")
-    
-    # ✅ دالة التطبيع
-    import re
+    st.subheader("📘 البحث الذكي باستخدام ملف Excel (الاسم + اسم مركز الاقتراع)")
+    st.markdown("**📄 يجب أن يحتوي الملف على عمودين:** `الاسم` و `اسم مركز الاقتراع`")
+
+    # ---- دالة التطبيع العربي ----
     AR_DIACRITICS = str.maketrans('', '', ''.join([
         '\u0610','\u0611','\u0612','\u0613','\u0614','\u0615','\u0616','\u0617','\u0618','\u0619','\u061A',
         '\u064B','\u064C','\u064D','\u064E','\u064F','\u0650','\u0651','\u0652','\u0653','\u0654','\u0655',
         '\u0656','\u0657','\u0658','\u0659','\u065A','\u065B','\u065C','\u065D','\u065E','\u065F','\u0670'
     ]))
+
     def normalize_ar(text: str) -> str:
         if not text:
             return ""
@@ -383,142 +383,169 @@ with tab_file_name_center:
         s = (s.replace("أ","ا").replace("إ","ا").replace("آ","ا")
              .replace("ؤ","و").replace("ئ","ي").replace("ى","ي").replace("ة","ه"))
         return s.lower()
-    
-    file_nc = st.file_uploader("📤 ارفع ملف Excel يحتوي الاسم + اسم مركز الاقتراع", type=["xlsx"], key="excel_name_center_fast")
-    run_nc = st.button("🚀 تشغيل البحث الذكي والسريع")
 
-    if file_nc and run_nc:
-        progress = st.progress(0)
-        status = st.empty()
-        stage_text = st.empty()
+    # ---- رفع الملف ----
+    file_nc = st.file_uploader("📤 ارفع ملف Excel", type=["xlsx"], key="excel_name_center_final")
+    run_btn = st.button("🚀 تشغيل البحث الذكي")
+
+    if file_nc and run_btn:
         try:
-            stage_text.text("📂 قراءة الملف...")
-            xdf = pd.read_excel(file_nc, engine="openpyxl")
-            time.sleep(0.5)
-            progress.progress(0.1)
+            # ✅ المرحلة 1: قراءة الملف
+            progress = st.progress(0)
+            status = st.empty()
+            progress.progress(0.05)
+            status.text("📂 جاري قراءة الملف...")
 
+            df_input = pd.read_excel(file_nc, engine="openpyxl")
+
+            # تنظيف أسماء الأعمدة
             def clean_col(c): return str(c).replace("\u200f","").replace("\u200e","").strip().lower()
-            cleaned_cols = {clean_col(c): c for c in xdf.columns}
-            name_col = None; center_col = None
-            for c in ["الاسم","الاسم الثلاثي","name","full name"]:
-                if clean_col(c) in cleaned_cols: name_col = cleaned_cols[clean_col(c)]
-            for c in ["اسم مركز الاقتراع","مركز الاقتراع","polling center name","center name"]:
-                if clean_col(c) in cleaned_cols: center_col = cleaned_cols[clean_col(c)]
+            cols = {clean_col(c): c for c in df_input.columns}
+
+            name_col = next((cols[c] for c in cols if "اسم" in c and "مركز" not in c), None)
+            center_col = next((cols[c] for c in cols if "مركز" in c), None)
 
             if not name_col or not center_col:
-                st.error("❌ تأكد من وجود عمودين: الاسم واسم مركز الاقتراع.")
+                st.error("❌ لم يتم العثور على الأعمدة المطلوبة (الاسم / اسم مركز الاقتراع).")
                 st.stop()
 
-            centers_list = xdf[center_col].dropna().astype(str).str.strip().tolist()
-            unique_centers = sorted(list(set(centers_list)))
-            if not unique_centers:
-                st.warning("⚠️ لا توجد مراكز صالحة.")
-                st.stop()
+            df_input[name_col] = df_input[name_col].astype(str)
+            df_input[center_col] = df_input[center_col].astype(str)
 
-            stage_text.text("🧠 تحميل بيانات المراكز من القاعدة...")
-            conn = get_conn()
+            centers = df_input[center_col].dropna().unique().tolist()
+            progress.progress(0.15)
+            status.text(f"📊 تم تحديد {len(centers)} مركز اقتراع فريد...")
+
+            # ✅ المرحلة 2: تحميل البيانات من القاعدة
             all_dfs = []
             batch_size = 100
-            total_batches = (len(unique_centers) + batch_size - 1) // batch_size
+            total_batches = max(1, (len(centers) + batch_size - 1) // batch_size)
+            conn = None
 
-            for i in range(total_batches):
-                batch = unique_centers[i * batch_size:(i + 1) * batch_size]
-                query = """
-                    SELECT "رقم الناخب","الاسم الثلاثي","الجنس","هاتف","رقم العائلة",
-                           "اسم مركز الاقتراع","رقم مركز الاقتراع",
-                           "المدينة","رقم مركز التسجيل","اسم مركز التسجيل","تاريخ الميلاد"
-                    FROM "naynawa" WHERE "اسم مركز الاقتراع" = ANY(%s)
-                """
-                df_part = pd.read_sql_query(query, conn, params=(batch,))
-                if not df_part.empty:
-                    all_dfs.append(df_part)
-                progress.progress(0.1 + 0.4 * (i + 1) / total_batches)
-                status.text(f"🔄 تحميل المراكز {i+1}/{total_batches}...")
+            try:
+                conn = get_conn()
+                for i in range(total_batches):
+                    batch = centers[i*batch_size:(i+1)*batch_size]
+                    q = """
+                        SELECT "رقم الناخب","الاسم الثلاثي","الجنس","هاتف","رقم العائلة",
+                               "اسم مركز الاقتراع","رقم مركز الاقتراع",
+                               "المدينة","رقم مركز التسجيل","اسم مركز التسجيل","تاريخ الميلاد"
+                        FROM "naynawa" WHERE "اسم مركز الاقتراع" = ANY(%s)
+                    """
+                    df_part = pd.read_sql_query(q, conn, params=(batch,))
+                    if not df_part.empty:
+                        all_dfs.append(df_part)
 
-            conn.close()
+                    pct = 0.15 + (0.45 * (i + 1) / total_batches)
+                    progress.progress(pct)
+                    status.text(f"📥 تحميل بيانات المراكز ({i+1}/{total_batches}) ...")
+
+            finally:
+                try:
+                    if conn:
+                        conn.close()
+                        if "db_conn" in st.session_state:
+                            del st.session_state.db_conn
+                except:
+                    pass
 
             if not all_dfs:
-                st.warning("⚠️ لم يتم العثور على أي سجلات.")
+                st.warning("⚠️ لم يتم العثور على بيانات في قاعدة البيانات.")
                 st.stop()
 
             db_df = pd.concat(all_dfs, ignore_index=True)
-            db_df["__norm_name"] = db_df["الاسم الثلاثي"].apply(normalize_ar)
-            db_df["__norm_center"] = db_df["اسم مركز الاقتراع"].apply(normalize_ar)
-            xdf["__norm_name"] = xdf[name_col].apply(normalize_ar)
-            xdf["__norm_center"] = xdf[center_col].apply(normalize_ar)
+            progress.progress(0.65)
+            status.text(f"✅ تم تحميل {len(db_df)} سجل من قاعدة البيانات.")
 
-            stage_text.text("🔍 مطابقة الأسماء...")
+            # ✅ المرحلة 3: التطبيع للمقارنة
+            db_df["__n_name"] = db_df["الاسم الثلاثي"].apply(normalize_ar)
+            db_df["__n_center"] = db_df["اسم مركز الاقتراع"].apply(normalize_ar)
+            df_input["__n_name"] = df_input[name_col].apply(normalize_ar)
+            df_input["__n_center"] = df_input[center_col].apply(normalize_ar)
+
+            progress.progress(0.75)
+            status.text("🤖 جاري مطابقة الأسماء...")
+
+            # ✅ المرحلة 4: البحث والمقارنة
             results = []
-            total = len(xdf)
-            for idx, row in xdf.iterrows():
-                in_name = row["__norm_name"]
-                in_center = row["__norm_center"]
-                orig_name = row[name_col]
-                orig_center = row[center_col]
+            for idx, row in df_input.iterrows():
+                name = row["__n_name"]
+                center = row["__n_center"]
+                subset = db_df[db_df["__n_center"] == center]
 
-                subset = db_df[db_df["__norm_center"] == in_center]
                 if subset.empty:
                     results.append({
-                        "الاسم (من الملف)": orig_name,
-                        "اسم مركز الاقتراع (من الملف)": orig_center,
-                        "الاسم (من القاعدة)": "—",
                         "رقم الناخب": "",
-                        "درجة التطابق": 0,
-                        "الحالة": 0
+                        "الاسم": row[name_col],
+                        "الجنس": "",
+                        "رقم الهاتف": "",
+                        "رقم العائلة": "",
+                        "مركز الاقتراع": row[center_col],
+                        "رقم مركز الاقتراع": "",
+                        "رقم المحطة": 1,
+                        "رقم المندوب الرئيسي": "",
+                        "الحالة": 0,
+                        "ملاحظة": "❌ لم يُعثر على الاسم",
+                        "الاسم في القاعدة": "",
+                        "درجة التطابق": 0
                     })
-                else:
-                    best = process.extractOne(in_name, subset["__norm_name"], scorer=fuzz.token_sort_ratio)
-                    if best:
-                        best_name, score, idx_best = best
-                        record = subset.iloc[idx_best]
-                        status_code = 1 if score >= 85 else (2 if score >= 70 else 0)
-                        results.append({
-                            "رقم الناخب": record["رقم الناخب"],
-                            "الاسم (من الملف)": orig_name,
-                            "الاسم (من القاعدة)": record["الاسم الثلاثي"],
-                            "درجة التطابق": round(score, 2),
-                            "اسم مركز الاقتراع (من الملف)": orig_center,
-                            "مركز الاقتراع": record["اسم مركز الاقتراع"],
-                            "الحالة": status_code
-                        })
-                if idx % 200 == 0:
-                    progress.progress(0.55 + 0.4 * (idx / total))
-                    status.text(f"⚙️ مطابقة {idx}/{total} اسم...")
+                    continue
 
-            stage_text.text("📦 تجهيز ملف النتائج...")
+                match, score, _ = process.extractOne(name, subset["__n_name"], scorer=fuzz.token_sort_ratio)
+                best = subset[subset["__n_name"] == match].iloc[0]
+
+                results.append({
+                    "رقم الناخب": best["رقم الناخب"],
+                    "الاسم": best["الاسم الثلاثي"],
+                    "الجنس": best["الجنس"],
+                    "رقم الهاتف": best["هاتف"],
+                    "رقم العائلة": best["رقم العائلة"],
+                    "مركز الاقتراع": best["اسم مركز الاقتراع"],
+                    "رقم مركز الاقتراع": best["رقم مركز الاقتراع"],
+                    "رقم المحطة": 1,
+                    "رقم المندوب الرئيسي": "",
+                    "الحالة": 0,  # تبقى مثل تبويب رفع ملف Excel
+                    "ملاحظة": "",
+                    "الاسم في القاعدة": best["الاسم الثلاثي"],
+                    "درجة التطابق": round(score, 2)
+                })
+
+                if idx % 300 == 0:
+                    progress.progress(0.75 + 0.2 * (idx / len(df_input)))
+                    status.text(f"🔎 مطابقة {idx+1}/{len(df_input)} اسم...")
+
+            progress.progress(0.98)
+            status.text("💾 جاري إنشاء ملف النتائج...")
+
             res_df = pd.DataFrame(results)
-            res_df["رقم المندوب الرئيسي"] = ""
-            res_df["ملاحظة"] = ""
-            res_df["رقم المحطة"] = 1
-            export_df = res_df[[
-                "رقم الناخب","الاسم (من الملف)","الاسم (من القاعدة)","درجة التطابق",
-                "اسم مركز الاقتراع (من الملف)","مركز الاقتراع",
-                "رقم المندوب الرئيسي","الحالة","ملاحظة","رقم المحطة"
+
+            # ✅ نفس تنسيق ملف تبويب رفع ملف Excel
+            res_df = res_df[[
+                "رقم الناخب","الاسم","الجنس","رقم الهاتف","رقم العائلة",
+                "مركز الاقتراع","رقم مركز الاقتراع","رقم المحطة",
+                "رقم المندوب الرئيسي","الحالة","ملاحظة",
+                "الاسم في القاعدة","درجة التطابق"
             ]]
 
-            out_file = "نتائج_الاسم_ومركز_ذكي.xlsx"
-            export_df.to_excel(out_file, index=False, engine="openpyxl")
+            out_file = "نتائج_الاسم_ومركز.xlsx"
+            res_df.to_excel(out_file, index=False, engine="openpyxl")
             wb = load_workbook(out_file)
             wb.active.sheet_view.rightToLeft = True
             wb.save(out_file)
 
             progress.progress(1.0)
-            stage_text.text("✅ اكتمل البحث بنجاح!")
+            status.text("✅ تمت العملية بنجاح!")
 
-            st.success(f"تمت مطابقة {len(res_df)} اسمًا.")
+            st.success("🎉 تم إكمال المطابقة وتحميل النتائج!")
             st.dataframe(res_df, use_container_width=True, height=500)
 
             with open(out_file, "rb") as f:
-                st.download_button(
-                    "⬇️ تحميل النتائج التفصيلية",
-                    f,
-                    file_name="نتائج_الاسم_ومركز_ذكي.xlsx",
-                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-                )
+                st.download_button("⬇️ تحميل النتائج", f,
+                    file_name="نتائج_الاسم_ومركز.xlsx",
+                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
 
         except Exception as e:
             st.error(f"❌ خطأ أثناء تنفيذ البحث: {e}")
-
 
 # ----------------------------------------------------------------------------- #
 # 5) 📦 عدّ البطاقات (أرقام 8 خانات) + بحث في القاعدة + قائمة الأرقام غير الموجودة
