@@ -360,10 +360,19 @@ with tab_file:
 # 4) 📘 رفع Excel (الاسم + اسم مركز الاقتراع) — نسخة فائقة السرعة (محسّنة)
 # ----------------------------------------------------------------------------- #
 with tab_file_name_center:
-    st.subheader("📘 البحث الذكي باستخدام ملف Excel (الاسم + اسم مركز الاقتراع) — نسخة سريعة جدًا ⚡")
+    st.subheader("📘 البحث الذكي (عرض مباشر + حفظ تدريجي) ⚡")
 
     file_nc = st.file_uploader("📤 ارفع ملف Excel يحتوي الاسم + اسم مركز الاقتراع", type=["xlsx"])
-    run_nc = st.button("🚀 تشغيل البحث السريع")
+    run_nc = st.button("🚀 بدء البحث ومشاهدة التقدم")
+
+    from rapidfuzz import process, fuzz
+    import time, tempfile, openpyxl
+
+    # ✅ دالة مساعدة للتطبيع السريع
+    def normalize_fast(s):
+        uniq = s.fillna("").astype(str).unique()
+        mapping = {u: normalize_ar(u) for u in uniq}
+        return s.fillna("").astype(str).map(mapping)
 
     @st.cache_data(show_spinner=False)
     def load_db_for_centers(centers):
@@ -377,62 +386,35 @@ with tab_file_name_center:
                 WHERE "اسم مركز الاقتراع" = ANY(%s)
             """
             part = pd.read_sql_query(q, conn, params=(centers[i:i+batch_size],))
-            all_parts.append(part)
+            if not part.empty:
+                all_parts.append(part)
         conn.close()
         return pd.concat(all_parts, ignore_index=True) if all_parts else pd.DataFrame()
 
     if file_nc and run_nc:
-        from rapidfuzz import process, fuzz
-        import time
         start = time.time()
-        progress = st.progress(0)
-        status = st.empty()
-
+        st.info("📦 جاري تجهيز البيانات...")
         df = pd.read_excel(file_nc, engine="openpyxl")
         df.columns = df.columns.str.strip()
+
         if "الاسم" not in df.columns or "اسم مركز الاقتراع" not in df.columns:
             st.error("❌ الملف يجب أن يحتوي على الأعمدة: الاسم واسم مركز الاقتراع")
             st.stop()
 
-        # ✅ تطبيع موحّد وسريع للأسماء والمراكز
-        def normalize_fast(s):
-            uniq = s.fillna("").astype(str).unique()
-            mapping = {u: normalize_ar(u) for u in uniq}
-            return s.fillna("").astype(str).map(mapping)
-
         df["__norm_name"] = normalize_fast(df["الاسم"])
         df["__norm_center"] = normalize_fast(df["اسم مركز الاقتراع"])
         centers = df["اسم مركز الاقتراع"].dropna().unique().tolist()
-        progress.progress(0.1)
 
-        # ✅ تحميل بيانات القاعدة دفعة واحدة
-        status.text("🗄️ تحميل بيانات القاعدة...")
+        # تحميل بيانات القاعدة دفعة واحدة
         db_df = load_db_for_centers(centers)
         if db_df.empty:
-            st.warning("⚠️ لم يتم العثور على أي مركز مطابق في القاعدة.")
+            st.warning("⚠️ لم يتم العثور على أي بيانات للمراكز.")
             st.stop()
 
         db_df["__norm_name"] = normalize_fast(db_df["الاسم الثلاثي"])
         db_df["__norm_center"] = normalize_fast(db_df["اسم مركز الاقتراع"])
-        progress.progress(0.3)
 
-        # ✅ دمج مباشر أولاً (Exact Match) لتقليل الحجم
-        merged = df.merge(
-            db_df,
-            how="left",
-            left_on=["__norm_name", "__norm_center"],
-            right_on=["__norm_name", "__norm_center"],
-            suffixes=("_file", "_db")
-        )
-        exact = merged[merged["رقم الناخب"].notna()].copy()
-        exact["درجة التطابق"] = 100
-        st.info(f"✅ تطابق مباشر: {len(exact)} من {len(df)}")
-
-        # ✅ المتبقي فقط يعمل عليه Fuzzy
-        to_fuzzy = merged[merged["رقم الناخب"].isna()][["الاسم","اسم مركز الاقتراع","__norm_name","__norm_center"]]
-        progress.progress(0.4)
-
-        # ✅ تجهيز أسماء القاعدة لكل مركز مرة واحدة فقط
+        # تجهيز المجموعات
         groups = {}
         for c, sub in db_df.groupby("__norm_center"):
             groups[c] = {
@@ -440,78 +422,91 @@ with tab_file_name_center:
                 "data": sub[["الاسم الثلاثي","رقم الناخب","اسم مركز الاقتراع"]].reset_index(drop=True)
             }
 
-        results = []
-        total = len(to_fuzzy)
-        status.text(f"🔍 بدء المطابقة الغامضة لـ {total} سجل...")
+        # 🔄 تجهيز الملف المؤقت
+        temp_dir = tempfile.gettempdir()
+        temp_path = os.path.join(temp_dir, "partial_results.xlsx")
 
-        # ✅ مطابقة غامضة سريعة (بـ cutoff لتقليل المقارنات)
-        for i, row in to_fuzzy.iterrows():
-            norm_center = row["__norm_center"]
-            norm_name = row["__norm_name"]
+        results = []
+        total = len(df)
+        progress = st.progress(0)
+        status = st.empty()
+        log_box = st.empty()
+
+        # إنشاء ملف Excel فارغ أولًا
+        wb = openpyxl.Workbook()
+        ws = wb.active
+        ws.title = "نتائج مؤقتة"
+        ws.append(["الاسم (من الملف)", "اسم مركز الاقتراع (من الملف)", "الاسم في القاعدة",
+                   "درجة التطابق", "رقم الناخب", "مركز الاقتراع"])
+        wb.save(temp_path)
+
+        for i, row in df.iterrows():
             orig_name = row["الاسم"]
             orig_center = row["اسم مركز الاقتراع"]
+            norm_name = row["__norm_name"]
+            norm_center = row["__norm_center"]
 
             grp = groups.get(norm_center)
             if not grp:
-                results.append({
+                match_row = {
                     "الاسم (من الملف)": orig_name,
                     "اسم مركز الاقتراع (من الملف)": orig_center,
                     "الاسم في القاعدة": "—",
                     "درجة التطابق": 0,
                     "رقم الناخب": "",
                     "مركز الاقتراع": ""
-                })
-                continue
-
-            match = process.extractOne(
-                norm_name,
-                grp["names"],
-                scorer=fuzz.token_sort_ratio,
-                score_cutoff=80  # تجاهل التطابقات الضعيفة لتسريع التنفيذ
-            )
-
-            if match:
-                _, score, idx = match
-                drow = grp["data"].iloc[idx]
-                results.append({
-                    "الاسم (من الملف)": orig_name,
-                    "اسم مركز الاقتراع (من الملف)": orig_center,
-                    "الاسم في القاعدة": drow["الاسم الثلاثي"],
-                    "درجة التطابق": round(score, 2),
-                    "رقم الناخب": drow["رقم الناخب"],
-                    "مركز الاقتراع": drow["اسم مركز الاقتراع"]
-                })
+                }
             else:
-                results.append({
-                    "الاسم (من الملف)": orig_name,
-                    "اسم مركز الاقتراع (من الملف)": orig_center,
-                    "الاسم في القاعدة": "—",
-                    "درجة التطابق": 0,
-                    "رقم الناخب": "",
-                    "مركز الاقتراع": ""
-                })
+                match = process.extractOne(
+                    norm_name,
+                    grp["names"],
+                    scorer=fuzz.token_sort_ratio,
+                    score_cutoff=80
+                )
+                if match:
+                    _, score, idx = match
+                    drow = grp["data"].iloc[idx]
+                    match_row = {
+                        "الاسم (من الملف)": orig_name,
+                        "اسم مركز الاقتراع (من الملف)": orig_center,
+                        "الاسم في القاعدة": drow["الاسم الثلاثي"],
+                        "درجة التطابق": round(score, 2),
+                        "رقم الناخب": drow["رقم الناخب"],
+                        "مركز الاقتراع": drow["اسم مركز الاقتراع"]
+                    }
+                else:
+                    match_row = {
+                        "الاسم (من الملف)": orig_name,
+                        "اسم مركز الاقتراع (من الملف)": orig_center,
+                        "الاسم في القاعدة": "—",
+                        "درجة التطابق": 0,
+                        "رقم الناخب": "",
+                        "مركز الاقتراع": ""
+                    }
 
-            if total and (len(results) % 500 == 0 or len(results) == total):
-                done = 0.4 + 0.5 * (len(results) / total)
-                progress.progress(min(done, 0.95))
-                status.text(f"⌛ تمت معالجة {len(results)}/{total}")
+            results.append(match_row)
 
-        fuzzy_df = pd.DataFrame(results)
-        final = pd.concat([exact[[
-            "الاسم_file","اسم مركز الاقتراع_file","الاسم الثلاثي","درجة التطابق","رقم الناخب","اسم مركز الاقتراع_db"
-        ]].rename(columns={
-            "الاسم_file":"الاسم (من الملف)",
-            "اسم مركز الاقتراع_file":"اسم مركز الاقتراع (من الملف)",
-            "الاسم الثلاثي":"الاسم في القاعدة",
-            "اسم مركز الاقتراع_db":"مركز الاقتراع"
-        }), fuzzy_df], ignore_index=True)
+            # ✅ حفظ مؤقت كل 100 صف
+            if (i + 1) % 100 == 0 or i + 1 == total:
+                temp_df = pd.DataFrame(results)
+                with pd.ExcelWriter(temp_path, engine="openpyxl", mode="a", if_sheet_exists="replace") as writer:
+                    temp_df.to_excel(writer, index=False, sheet_name="نتائج مؤقتة")
 
-        out_file = "نتائج_التطابق_السريع.xlsx"
-        final.to_excel(out_file, index=False)
-        progress.progress(1.0)
-        st.success(f"✅ اكتمل التطابق خلال {time.time()-start:.1f} ثانية فقط 🎯")
-        with open(out_file, "rb") as f:
-            st.download_button("⬇️ تحميل النتائج", f, file_name="نتائج_التطابق_السريع.xlsx")
+            # ✅ تحديث الحالة في الواجهة
+            percent = (i + 1) / total
+            progress.progress(percent)
+            log_box.text(f"🔹 {i+1}/{total}: {orig_name[:25]} ...")
+            if (i + 1) % 200 == 0:
+                status.text(f"⌛ تمت معالجة {i+1}/{total} | الوقت: {time.time()-start:.1f} ثانية")
+
+        # ✅ حفظ نهائي
+        final_df = pd.DataFrame(results)
+        out_file = "نتائج_التطابق_النهائية.xlsx"
+        final_df.to_excel(out_file, index=False)
+
+        st.success(f"✅ تم اكتمال البحث في {time.time()-start:.1f} ثانية")
+        st.download_button("⬇️ تحميل النتائج النهائية", open(out_file, "rb"), file_name="نتائج_التطابق_النهائية.xlsx")
+        st.download_button("⬇️ تحميل الملف المؤقت (backup)", open(temp_path, "rb"), file_name="نسخة_احتياطية_مؤقتة.xlsx")
 
 
 # ----------------------------------------------------------------------------- #
