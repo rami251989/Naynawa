@@ -355,17 +355,15 @@ with tab_file:
                 st.warning("⚠️ لا يوجد نتائج")
         except Exception as e:
             st.error(f"❌ خطأ: {e}")
-
 # ==============================================================
-# 📘 تبويب رفع Excel (الاسم + اسم مركز الاقتراع) — نسخة محسّنة وسريعة
+# 📘 تبويب رفع Excel (الاسم + اسم مركز الاقتراع) — نسخة محسّنة جدًا
 # ==============================================================
-
 from rapidfuzz import process, fuzz
 from concurrent.futures import ThreadPoolExecutor
 from functools import lru_cache
 import time
 
-# ✅ تطبيع النصوص العربية مع كاش لتسريع الأداء
+# ✅ دالة تطبيع النصوص العربية — مع كاش لتسريع الأداء
 AR_DIACRITICS = str.maketrans('', '', ''.join([
     '\u0610','\u0611','\u0612','\u0613','\u0614','\u0615','\u0616','\u0617','\u0618','\u0619','\u061A',
     '\u064B','\u064C','\u064D','\u064E','\u064F','\u0650','\u0651','\u0652','\u0653','\u0654','\u0655',
@@ -384,7 +382,7 @@ def normalize_ar(text: str) -> str:
     return s.lower()
 
 
-# ✅ دالة المطابقة الذكية
+# ✅ دالة مطابقة اسم واحد مع قاعدة بيانات مركز معين
 def match_single(row, db_subset):
     in_name = normalize_ar(row["__norm_name"])
     orig_name = row["الاسم"]
@@ -407,7 +405,7 @@ def match_single(row, db_subset):
         _, score, idx = best_match
         best_row = db_subset.iloc[idx]
         if score >= 85:
-            status = "✅ مطابق جزئي/تام"
+            status = "✅ مطابق تام/جزئي"
         elif score >= 60:
             status = "⚠️ تطابق ضعيف"
         else:
@@ -432,49 +430,52 @@ def match_single(row, db_subset):
 
 
 # ==============================================================
-# 🧠 تبويب Streamlit — البحث الذكي
+# 🧠 واجهة Streamlit للتبويب الذكي + شريط تقدم + ETA
 # ==============================================================
 
 with tab_file_name_center:
     st.subheader("📘 البحث الذكي باستخدام ملف Excel (الاسم + اسم مركز الاقتراع)")
-    st.markdown("💡 يفضل أن يحتوي الملف على عمودين: **الاسم** و **اسم مركز الاقتراع**")
+    st.markdown("💡 يفضل أن يحتوي الملف على عمودين: `الاسم` و `اسم مركز الاقتراع`.")
 
-    file_nc = st.file_uploader("📤 ارفع ملف Excel", type=["xlsx"], key="excel_name_center")
+    file_nc = st.file_uploader("📤 ارفع ملف Excel", type=["xlsx"], key="excel_name_center_smart")
     run_nc = st.button("🚀 تشغيل البحث الذكي")
 
     if file_nc and run_nc:
         start_time = time.time()
+        progress = st.progress(0)
+        stage = st.empty()
+        stats = st.empty()
+        eta_display = st.empty()
 
         try:
-            progress = st.progress(0)
-            stage = st.empty()
-
-            # 🟢 1️⃣ قراءة الملف
+            # 1️⃣ قراءة الملف
             stage.text("📖 جاري قراءة ملف Excel...")
             df_input = pd.read_excel(file_nc, engine="openpyxl")
-            progress.progress(0.1)
-
-            # التحقق من الأعمدة المطلوبة
             df_input.columns = df_input.columns.str.strip()
+
             if "الاسم" not in df_input.columns or "اسم مركز الاقتراع" not in df_input.columns:
-                st.error("❌ يجب أن يحتوي الملف على الأعمدة: 'الاسم' و 'اسم مركز الاقتراع'")
+                st.error("❌ تأكد من وجود الأعمدة: الاسم، اسم مركز الاقتراع.")
                 st.stop()
 
-            # 🟢 2️⃣ التطبيع المسبق
-            stage.text("🔡 تطبيع النصوص العربية...")
+            progress.progress(0.1)
+            stats.text("✅ تم تحميل الملف.")
+
+            # 2️⃣ التطبيع
+            stage.text("🔡 تطبيع النصوص...")
             df_input["__norm_name"] = df_input["الاسم"].apply(normalize_ar)
             df_input["__norm_center"] = df_input["اسم مركز الاقتراع"].apply(normalize_ar)
-            unique_centers = df_input["اسم مركز الاقتراع"].dropna().unique().tolist()
+            centers = df_input["اسم مركز الاقتراع"].dropna().unique().tolist()
             progress.progress(0.2)
 
-            # 🟢 3️⃣ تحميل البيانات من القاعدة
+            # 3️⃣ تحميل البيانات من القاعدة
             stage.text("📦 تحميل بيانات المراكز من قاعدة البيانات...")
             conn = get_conn()
             all_dfs = []
             batch_size = 300
+            total_batches = (len(centers) + batch_size - 1) // batch_size
 
-            for i in range(0, len(unique_centers), batch_size):
-                batch = unique_centers[i:i+batch_size]
+            for i in range(total_batches):
+                batch = centers[i * batch_size:(i + 1) * batch_size]
                 q = """
                     SELECT "رقم الناخب","الاسم الثلاثي","اسم مركز الاقتراع"
                     FROM "naynawa"
@@ -485,16 +486,23 @@ with tab_file_name_center:
                     df_part["__norm_name"] = df_part["الاسم الثلاثي"].apply(normalize_ar)
                     df_part["__norm_center"] = df_part["اسم مركز الاقتراع"].apply(normalize_ar)
                     all_dfs.append(df_part)
-                progress.progress(0.2 + 0.3 * (i / len(unique_centers)))
+
+                pct = 0.2 + 0.3 * ((i + 1) / total_batches)
+                elapsed = time.time() - start_time
+                eta = (total_batches - (i + 1)) * (elapsed / (i + 1))
+                stats.text(f"🔍 تحميل المراكز {i+1}/{total_batches}")
+                eta_display.text(f"⏱️ الوقت المتبقي التقريبي: {eta:.1f} ث — المنقضي: {elapsed:.1f} ث")
+                progress.progress(pct)
 
             conn.close()
-            progress.progress(0.55)
-            stage.text("🤖 بدء عملية المطابقة الذكية...")
-
             db_df = pd.concat(all_dfs, ignore_index=True)
+            progress.progress(0.55)
 
-            # 🟢 4️⃣ تنفيذ المطابقة بشكل متوازي
+            # 4️⃣ المطابقة الذكية
+            stage.text("🤖 مطابقة الأسماء...")
+            total = len(df_input)
             results = []
+
             with ThreadPoolExecutor(max_workers=8) as executor:
                 futures = []
                 for _, row in df_input.iterrows():
@@ -503,14 +511,18 @@ with tab_file_name_center:
 
                 for i, f in enumerate(futures):
                     results.append(f.result())
-                    if i % 100 == 0:
-                        progress.progress(0.55 + 0.35 * (i / len(futures)))
+                    if (i + 1) % 100 == 0 or i + 1 == total:
+                        done_pct = 0.55 + 0.35 * ((i + 1) / total)
+                        elapsed = time.time() - start_time
+                        speed = (i + 1) / elapsed if elapsed > 0 else 0
+                        eta = (total - (i + 1)) / speed if speed > 0 else 0
+                        stats.text(f"📊 تم معالجة {i+1}/{total} اسم — سرعة {speed:.1f}/ث")
+                        eta_display.text(f"⏱️ الوقت المتبقي التقريبي: {eta:.1f} ث — المنقضي: {elapsed:.1f} ث")
+                        progress.progress(min(done_pct, 1.0))
 
-            # 🟢 5️⃣ تجهيز النتائج للتنزيل
+            # 5️⃣ توليد الملف النهائي
             stage.text("📁 إنشاء ملف النتائج...")
             res_df = pd.DataFrame(results)
-            progress.progress(0.95)
-
             res_df["رقم المندوب الرئيسي"] = ""
             res_df["الحالة_النهائية"] = 0
             res_df["ملاحظة"] = ""
@@ -525,18 +537,19 @@ with tab_file_name_center:
             out_file = "نتائج_الاسم_ومركز_الاقتراع_الذكي.xlsx"
             res_df.to_excel(out_file, index=False, engine="openpyxl")
 
+            total_time = time.time() - start_time
+            eta_display.text(f"✅ الاكتمال خلال {total_time:.1f} ثانية فقط.")
             progress.progress(1.0)
-            stage.text(f"✅ اكتملت العملية بنجاح خلال {round(time.time() - start_time, 2)} ثانية فقط.")
 
             with open(out_file, "rb") as f:
                 st.download_button(
-                    "⬇️ تحميل النتائج",
+                    "⬇️ تحميل النتائج النهائية",
                     f,
                     file_name="نتائج_الاسم_ومركز_الاقتراع_الذكي.xlsx",
                     mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
                 )
 
-            st.success("🎉 تم استخراج النتائج بسرعة وبدقة عالية جدًا.")
+            st.success(f"🎯 تمت العملية بنجاح في {total_time:.1f} ثانية ⚡")
 
         except Exception as e:
             st.error(f"❌ حدث خطأ أثناء التنفيذ: {e}")
