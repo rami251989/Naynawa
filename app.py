@@ -355,20 +355,19 @@ with tab_file:
                 st.warning("⚠️ لا يوجد نتائج")
         except Exception as e:
             st.error(f"❌ خطأ: {e}")
-
 # ----------------------------------------------------------------------------- #
-# 4) 📘 رفع Excel (الاسم + اسم مركز الاقتراع) — نسخة نهائية سريعة + عرض مباشر + حفظ تدريجي
+# 4️⃣ التبويب الرابع: البحث الذكي بالاسم + مركز الاقتراع (إصدار محسَّن وسريع وآمن)
 # ----------------------------------------------------------------------------- #
 with tab_file_name_center:
-    st.subheader("📘 البحث الذكي (عرض مباشر + حفظ تدريجي) ⚡")
+    st.subheader("📘 البحث الذكي (عرض مباشر + حفظ تدريجي وسريع) ⚡")
 
     file_nc = st.file_uploader("📤 ارفع ملف Excel يحتوي الاسم + اسم مركز الاقتراع", type=["xlsx"])
     run_nc = st.button("🚀 بدء البحث ومشاهدة التقدم")
 
     from rapidfuzz import process, fuzz
-    import time, tempfile, openpyxl, psycopg2.extras
+    import time, tempfile, openpyxl, os, psycopg2.extras
 
-    # ✅ دالة التطبيع الأصلية (ضرورية لتطابق الأسماء العربية)
+    # ✅ دالة التطبيع الأساسية للنصوص العربية
     def normalize_ar(text: str) -> str:
         if not text:
             return ""
@@ -383,25 +382,28 @@ with tab_file_name_center:
              .replace("ؤ","و").replace("ئ","ي").replace("ى","ي").replace("ة","ه"))
         return s.lower()
 
-    # ✅ تطبيع سريع مع caching
+    # ✅ تطبيع سريع باستخدام cache
     def normalize_fast(s):
         uniq = s.fillna("").astype(str).unique()
         mapping = {u: normalize_ar(u) for u in uniq}
         return s.fillna("").astype(str).map(mapping)
 
-    # ✅ تحميل بيانات المراكز دفعة دفعة من قاعدة البيانات
+    # ✅ تحميل بيانات المراكز دفعة دفعة من قاعدة البيانات (آمن)
     @st.cache_data(show_spinner=False)
     def load_db_for_centers(centers):
         conn = get_conn()
         all_parts = []
-        batch_size = 500  # حجم كل دفعة
+        batch_size = 500
+
         for i in range(0, len(centers), batch_size):
             batch = centers[i:i + batch_size]
+            # نحول كل القيم إلى نص لتجنب تضارب الأنواع
+            batch = [str(c).strip() for c in batch if c]
 
             query = """
                 SELECT "رقم الناخب","الاسم الثلاثي","اسم مركز الاقتراع"
                 FROM "naynawa"
-                WHERE "اسم مركز الاقتراع" = ANY(%(centers)s)
+                WHERE CAST("اسم مركز الاقتراع" AS TEXT) = ANY(%(centers)s)
             """
             params = {"centers": batch}
 
@@ -409,18 +411,14 @@ with tab_file_name_center:
                 part = pd.read_sql_query(query, conn, params=params)
                 if not part.empty:
                     all_parts.append(part)
+                st.write(f"📥 تم تحميل دفعة {i // batch_size + 1} ({len(batch)}) مركز...")
             except Exception as e:
-                st.warning(f"⚠️ خطأ أثناء تحميل بيانات جزء من المراكز: {e}")
-
-            st.write(f"📥 تم تحميل دفعة {i // batch_size + 1} ({len(batch)}) مركز...")
+                st.warning(f"⚠️ خطأ أثناء تحميل دفعة {i // batch_size + 1}: {e}")
 
         conn.close()
-        if all_parts:
-            return pd.concat(all_parts, ignore_index=True)
-        else:
-            return pd.DataFrame()
+        return pd.concat(all_parts, ignore_index=True) if all_parts else pd.DataFrame()
 
-    # ✅ تنفيذ العملية الكاملة
+    # ✅ تنفيذ البحث الكامل
     if file_nc and run_nc:
         start = time.time()
         st.info("📦 جاري تجهيز البيانات...")
@@ -432,7 +430,7 @@ with tab_file_name_center:
             st.error("❌ الملف يجب أن يحتوي على الأعمدة: الاسم واسم مركز الاقتراع")
             st.stop()
 
-        # ---- تطبيع النصوص ----
+        # ---- تطبيع الأسماء والمراكز ----
         df["__norm_name"] = normalize_fast(df["الاسم"])
         df["__norm_center"] = normalize_fast(df["اسم مركز الاقتراع"])
         centers = df["اسم مركز الاقتراع"].dropna().unique().tolist()
@@ -446,7 +444,7 @@ with tab_file_name_center:
         db_df["__norm_name"] = normalize_fast(db_df["الاسم الثلاثي"])
         db_df["__norm_center"] = normalize_fast(db_df["اسم مركز الاقتراع"])
 
-        # ---- بناء فهرس للمراكز ----
+        # ---- بناء فهرس سريع للمراكز ----
         groups = {}
         for c, sub in db_df.groupby("__norm_center"):
             groups[c] = {
@@ -464,7 +462,7 @@ with tab_file_name_center:
                    "درجة التطابق", "رقم الناخب", "مركز الاقتراع"])
         wb.save(temp_path)
 
-        # ---- واجهة تقدم ----
+        # ---- واجهة التقدم ----
         progress = st.progress(0)
         status = st.empty()
         log_box = st.empty()
@@ -491,14 +489,12 @@ with tab_file_name_center:
                     "مركز الاقتراع": ""
                 }
             else:
-                match = process.extractOne(
-                    norm_name,
-                    grp["names"],
-                    scorer=fuzz.token_sort_ratio,
-                    score_cutoff=80
-                )
-                if match:
-                    _, score, idx = match
+                # ⚡ تطابق سريع باستخدام cdist
+                scores = process.cdist([norm_name], grp["names"], scorer=fuzz.token_sort_ratio)
+                idx = int(scores.argmax())
+                score = float(scores[0, idx])
+
+                if score >= 80:
                     drow = grp["data"].iloc[idx]
                     match_row = {
                         "الاسم (من الملف)": orig_name,
@@ -520,14 +516,18 @@ with tab_file_name_center:
 
             results.append(match_row)
 
-            # ---- تحديث الحالة ----
-            progress.progress((i + 1) / total)
-            log_box.text(f"🔹 {i + 1}/{total}: {orig_name[:25]} ...")
-            if (i + 1) % 200 == 0:
+            # ✅ تحديث الحالة بشكل آمن (يتفادى TypeError)
+            if pd.notna(orig_name):
+                safe_name = str(orig_name)
+            else:
+                safe_name = ""
+            if (i + 1) % 50 == 0 or i + 1 == total:
+                progress.progress((i + 1) / total)
+                log_box.text(f"🔹 {i + 1}/{total}: {safe_name[:25]} ...")
                 elapsed = time.time() - start
-                status.text(f"⌛ تمت معالجة {i + 1}/{total} | الوقت المنقضي: {elapsed:.1f} ثانية")
+                status.text(f"⏱️ تمت معالجة {i + 1}/{total} | الوقت المنقضي: {elapsed:.1f} ثانية")
 
-            # ---- حفظ مؤقت كل 100 صف ----
+            # 💾 حفظ مؤقت كل 100 سجل
             if (i + 1) % 100 == 0 or i + 1 == total:
                 temp_df = pd.DataFrame(results)
                 with pd.ExcelWriter(temp_path, engine="openpyxl", mode="a", if_sheet_exists="replace") as writer:
@@ -546,7 +546,6 @@ with tab_file_name_center:
 
         with open(temp_path, "rb") as f2:
             st.download_button("⬇️ تحميل النسخة الاحتياطية المؤقتة", f2, file_name="نتائج_مؤقتة.xlsx")
-
 
 # ----------------------------------------------------------------------------- #
 # 5) 📦 عدّ البطاقات (أرقام 8 خانات) + بحث في القاعدة + قائمة الأرقام غير الموجودة
