@@ -357,7 +357,7 @@ with tab_file:
             st.error(f"❌ خطأ: {e}")
 
 # ----------------------------------------------------------------------------- #
-# 4) 📘 رفع Excel (الاسم + اسم مركز الاقتراع) — نسخة فائقة السرعة (محسّنة)
+# 4) 📘 رفع Excel (الاسم + اسم مركز الاقتراع) — محسّن مع عرض مباشر وتخزين مؤقت
 # ----------------------------------------------------------------------------- #
 with tab_file_name_center:
     st.subheader("📘 البحث الذكي (عرض مباشر + حفظ تدريجي) ⚡")
@@ -368,12 +368,28 @@ with tab_file_name_center:
     from rapidfuzz import process, fuzz
     import time, tempfile, openpyxl
 
-    # ✅ دالة مساعدة للتطبيع السريع
+    # ✅ دالة التطبيع (ضرورية لعمل normalize_fast)
+    def normalize_ar(text: str) -> str:
+        if not text:
+            return ""
+        s = str(text)
+        s = s.translate(str.maketrans('', '', ''.join([
+            '\u0610','\u0611','\u0612','\u0613','\u0614','\u0615','\u0616','\u0617','\u0618','\u0619','\u061A',
+            '\u064B','\u064C','\u064D','\u064E','\u064F','\u0650','\u0651','\u0652','\u0653','\u0654','\u0655',
+            '\u0656','\u0657','\u0658','\u0659','\u065A','\u065B','\u065C','\u065D','\u065E','\u065F','\u0670'
+        ])))
+        s = s.replace("ـ", "").replace(" ", "").strip()
+        s = (s.replace("أ","ا").replace("إ","ا").replace("آ","ا")
+             .replace("ؤ","و").replace("ئ","ي").replace("ى","ي").replace("ة","ه"))
+        return s.lower()
+
+    # ✅ دالة تطبيع سريعة مع caching
     def normalize_fast(s):
         uniq = s.fillna("").astype(str).unique()
         mapping = {u: normalize_ar(u) for u in uniq}
         return s.fillna("").astype(str).map(mapping)
 
+    # ✅ تحميل البيانات من القاعدة
     @st.cache_data(show_spinner=False)
     def load_db_for_centers(centers):
         conn = get_conn()
@@ -391,6 +407,7 @@ with tab_file_name_center:
         conn.close()
         return pd.concat(all_parts, ignore_index=True) if all_parts else pd.DataFrame()
 
+    # ✅ تنفيذ البحث
     if file_nc and run_nc:
         start = time.time()
         st.info("📦 جاري تجهيز البيانات...")
@@ -401,11 +418,12 @@ with tab_file_name_center:
             st.error("❌ الملف يجب أن يحتوي على الأعمدة: الاسم واسم مركز الاقتراع")
             st.stop()
 
+        # ---- تطبيع الأسماء والمراكز ----
         df["__norm_name"] = normalize_fast(df["الاسم"])
         df["__norm_center"] = normalize_fast(df["اسم مركز الاقتراع"])
         centers = df["اسم مركز الاقتراع"].dropna().unique().tolist()
 
-        # تحميل بيانات القاعدة دفعة واحدة
+        # ---- تحميل بيانات القاعدة ----
         db_df = load_db_for_centers(centers)
         if db_df.empty:
             st.warning("⚠️ لم يتم العثور على أي بيانات للمراكز.")
@@ -414,7 +432,7 @@ with tab_file_name_center:
         db_df["__norm_name"] = normalize_fast(db_df["الاسم الثلاثي"])
         db_df["__norm_center"] = normalize_fast(db_df["اسم مركز الاقتراع"])
 
-        # تجهيز المجموعات
+        # ---- تجهيز التجميع حسب المركز ----
         groups = {}
         for c, sub in db_df.groupby("__norm_center"):
             groups[c] = {
@@ -422,15 +440,9 @@ with tab_file_name_center:
                 "data": sub[["الاسم الثلاثي","رقم الناخب","اسم مركز الاقتراع"]].reset_index(drop=True)
             }
 
-        # 🔄 تجهيز الملف المؤقت
+        # ---- تجهيز ملف مؤقت للحفظ التدريجي ----
         temp_dir = tempfile.gettempdir()
         temp_path = os.path.join(temp_dir, "partial_results.xlsx")
-
-        results = []
-        total = len(df)
-        progress = st.progress(0)
-        status = st.empty()
-        log_box = st.empty()
 
         # إنشاء ملف Excel فارغ أولًا
         wb = openpyxl.Workbook()
@@ -440,6 +452,15 @@ with tab_file_name_center:
                    "درجة التطابق", "رقم الناخب", "مركز الاقتراع"])
         wb.save(temp_path)
 
+        results = []
+        total = len(df)
+        progress = st.progress(0)
+        status = st.empty()
+        log_box = st.empty()
+
+        st.info(f"🚀 بدء المعالجة... عدد السجلات: {total}")
+
+        # ---- المعالجة صفًا صفًا ----
         for i, row in df.iterrows():
             orig_name = row["الاسم"]
             orig_center = row["اسم مركز الاقتراع"]
@@ -486,27 +507,31 @@ with tab_file_name_center:
 
             results.append(match_row)
 
-            # ✅ حفظ مؤقت كل 100 صف
+            # ---- تحديث العرض في Streamlit ----
+            progress.progress((i + 1) / total)
+            log_box.text(f"🔹 {i+1}/{total}: {orig_name[:25]} ...")
+            if (i + 1) % 200 == 0:
+                status.text(f"⌛ تمت معالجة {i+1}/{total} | الوقت: {time.time()-start:.1f} ث")
+
+            # ---- حفظ مؤقت كل 100 صف ----
             if (i + 1) % 100 == 0 or i + 1 == total:
                 temp_df = pd.DataFrame(results)
                 with pd.ExcelWriter(temp_path, engine="openpyxl", mode="a", if_sheet_exists="replace") as writer:
                     temp_df.to_excel(writer, index=False, sheet_name="نتائج مؤقتة")
 
-            # ✅ تحديث الحالة في الواجهة
-            percent = (i + 1) / total
-            progress.progress(percent)
-            log_box.text(f"🔹 {i+1}/{total}: {orig_name[:25]} ...")
-            if (i + 1) % 200 == 0:
-                status.text(f"⌛ تمت معالجة {i+1}/{total} | الوقت: {time.time()-start:.1f} ثانية")
-
-        # ✅ حفظ نهائي
+        # ---- حفظ نهائي ----
         final_df = pd.DataFrame(results)
         out_file = "نتائج_التطابق_النهائية.xlsx"
         final_df.to_excel(out_file, index=False)
 
         st.success(f"✅ تم اكتمال البحث في {time.time()-start:.1f} ثانية")
-        st.download_button("⬇️ تحميل النتائج النهائية", open(out_file, "rb"), file_name="نتائج_التطابق_النهائية.xlsx")
-        st.download_button("⬇️ تحميل الملف المؤقت (backup)", open(temp_path, "rb"), file_name="نسخة_احتياطية_مؤقتة.xlsx")
+
+        # ---- أزرار التحميل ----
+        with open(out_file, "rb") as f1:
+            st.download_button("⬇️ تحميل النتائج النهائية", f1, file_name="نتائج_التطابق_النهائية.xlsx")
+
+        with open(temp_path, "rb") as f2:
+            st.download_button("⬇️ تحميل النسخة الاحتياطية المؤقتة", f2, file_name="نتائج_مؤقتة.xlsx")
 
 
 # ----------------------------------------------------------------------------- #
