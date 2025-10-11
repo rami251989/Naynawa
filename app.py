@@ -355,141 +355,134 @@ with tab_file:
                 st.warning("⚠️ لا يوجد نتائج")
         except Exception as e:
             st.error(f"❌ خطأ: {e}")
-# ================== الاستيراد ==================
-import streamlit as st
-import pandas as pd
-import time
-import os
+# ----------------------------------------------------------------------------- #
+# 4️⃣ التبويب الرابع: البحث الذكي بالاسم + مركز الاقتراع (إصدار محسَّن وسريع وآمن)
+# ----------------------------------------------------------------------------- #
+#             
+import streamlit as st, pandas as pd, psycopg2, os, time, tempfile, openpyxl
 from rapidfuzz import process, fuzz
-import psycopg2
-import openpyxl
 
-# ================== الاتصال بقاعدة البيانات ==================
+# ===== اتصال قاعدة البيانات =====
 def get_conn():
     return psycopg2.connect(
-        dbname=os.environ.get("DB_NAME"),
-        user=os.environ.get("DB_USER"),
-        password=os.environ.get("DB_PASSWORD"),
-        host=os.environ.get("DB_HOST"),
-        port=os.environ.get("DB_PORT"),
-        sslmode=os.environ.get("DB_SSLMODE", "require")
+        dbname=os.getenv("DB_NAME"),
+        user=os.getenv("DB_USER"),
+        password=os.getenv("DB_PASSWORD"),
+        host=os.getenv("DB_HOST"),
+        port=os.getenv("DB_PORT"),
+        sslmode=os.getenv("DB_SSLMODE", "require")
     )
 
-# ================== دوال التطبيع ==================
-def normalize_ar(text):
-    if not text:
-        return ""
-    s = str(text)
-    s = s.translate(str.maketrans('', '', ''.join([
+# ===== دوال التطبيع =====
+def normalize_ar(t):
+    if not t: return ""
+    s=str(t)
+    s=s.translate(str.maketrans("","", ''.join([
         '\u0610','\u0611','\u0612','\u0613','\u0614','\u0615','\u0616','\u0617','\u0618','\u0619','\u061A',
         '\u064B','\u064C','\u064D','\u064E','\u064F','\u0650','\u0651','\u0652','\u0653','\u0654','\u0655',
         '\u0656','\u0657','\u0658','\u0659','\u065A','\u065B','\u065C','\u065D','\u065E','\u065F','\u0670'
     ])))
-    s = s.replace("ـ", "").replace(" ", "").strip()
-    s = (s.replace("أ","ا").replace("إ","ا").replace("آ","ا")
-           .replace("ؤ","و").replace("ئ","ي").replace("ى","ي").replace("ة","ه"))
+    s=(s.replace("ـ","").replace(" ","")
+         .replace("أ","ا").replace("إ","ا").replace("آ","ا")
+         .replace("ؤ","و").replace("ئ","ي").replace("ى","ي").replace("ة","ه"))
     return s.lower()
 
-def normalize_fast(series):
-    uniq = series.fillna("").astype(str).unique()
-    mapping = {u: normalize_ar(u) for u in uniq}
-    return series.fillna("").astype(str).map(mapping)
+def normalize_fast(col):
+    uniq=col.fillna("").astype(str).unique()
+    mp={u:normalize_ar(u) for u in uniq}
+    return col.fillna("").astype(str).map(mp)
 
-# ================== واجهة Streamlit ==================
+# ===== واجهة المستخدم =====
 st.set_page_config(page_title="البحث الذكي", layout="wide")
-st.title("📘 البحث الذكي (الاسم + مركز الاقتراع)")
+st.title("📘 البحث الذكي بالاسم + مركز الاقتراع")
 
-file_nc = st.file_uploader("📤 ارفع ملف Excel يحتوي الاسم + اسم مركز الاقتراع", type=["xlsx"])
-run_nc = st.button("🚀 بدء البحث")
+file_nc=st.file_uploader("📤 ارفع ملف Excel فيه الاسم واسم مركز الاقتراع", type=["xlsx"])
+run=st.button("🚀 بدء البحث")
 
-# ================== تحميل بيانات من قاعدة البيانات ==================
-@st.cache_data(show_spinner=False)
-def load_db_data():
-    conn = get_conn()
-    query = """SELECT "رقم الناخب", "الاسم الثلاثي", "اسم مركز الاقتراع" FROM "naynawa";"""
-    df = pd.read_sql_query(query, conn)
+# ===== تحميل قاعدة البيانات =====
+@st.cache_data
+def load_db():
+    conn=get_conn()
+    q='SELECT "رقم الناخب","الاسم الثلاثي","اسم مركز الاقتراع" FROM "naynawa";'
+    df=pd.read_sql(q,conn)
     conn.close()
     return df
 
-# ================== تنفيذ البحث ==================
-if file_nc and run_nc:
-    start = time.time()
-    st.info("⏳ جاري التحميل والمعالجة...")
-
-    # قراءة الملف
-    df = pd.read_excel(file_nc, engine="openpyxl")
-    df.columns = df.columns.str.strip()
-
-    if "الاسم" not in df.columns or "اسم مركز الاقتراع" not in df.columns:
-        st.error("❌ الملف يجب أن يحتوي على الأعمدة: الاسم واسم مركز الاقتراع")
+# ===== منطق البحث =====
+if run:
+    if not file_nc:
+        st.error("❌ رجاء ارفع الملف أولاً")
         st.stop()
 
-    # تطبيع
-    df["__norm_name"] = normalize_fast(df["الاسم"])
-    df["__norm_center"] = normalize_fast(df["اسم مركز الاقتراع"])
+    df=pd.read_excel(file_nc,engine="openpyxl")
+    if not {"الاسم","اسم مركز الاقتراع"}.issubset(df.columns):
+        st.error("❌ الملف يجب أن يحوي العمودين: الاسم واسم مركز الاقتراع")
+        st.stop()
 
-    # تحميل بيانات القاعدة
-    db_df = load_db_data()
-    db_df["__norm_name"] = normalize_fast(db_df["الاسم الثلاثي"])
-    db_df["__norm_center"] = normalize_fast(db_df["اسم مركز الاقتراع"])
+    st.info("⏳ تجهيز البيانات...")
+    df["__n_name"]=normalize_fast(df["الاسم"])
+    df["__n_center"]=normalize_fast(df["اسم مركز الاقتراع"])
+    db=load_db()
+    db["__n_name"]=normalize_fast(db["الاسم الثلاثي"])
+    db["__n_center"]=normalize_fast(db["اسم مركز الاقتراع"])
 
-    # نتائج
-    results = []
-    progress = st.progress(0)
-    total = len(df)
+    results=[]
+    total=len(df)
+    prog=st.progress(0)
+    log=st.empty()
+    t0=time.time()
 
-    for i, row in df.iterrows():
-        name = row["الاسم"]
-        center = row["اسم مركز الاقتراع"]
-        n_name = row["__norm_name"]
-        n_center = row["__norm_center"]
+    for i,row in df.iterrows():
+        name=row["الاسم"]; center=row["اسم مركز الاقتراع"]
+        n_name=row["__n_name"]; n_center=row["__n_center"]
 
-        # حساب التشابه بالاسم
-        scores = process.cdist([n_name], db_df["__norm_name"].tolist(), scorer=fuzz.token_sort_ratio)[0]
-        matches = db_df.iloc[[i for i, s in enumerate(scores) if s >= 90]].copy()
-        matches["درجة تطابق الاسم"] = [round(s, 2) for s in scores if s >= 90]
+        scores=process.cdist([n_name],db["__n_name"].tolist(),scorer=fuzz.token_sort_ratio)[0]
+        idxs=[i for i,s in enumerate(scores) if s>=90]
+        subset=db.iloc[idxs].copy()
+        subset["score_name"]=[scores[j] for j in idxs]
 
-        # في حال تعدد الأسماء، نستخدم مركز الاقتراع كعامل تمييز إضافي
-        if len(matches) > 1:
-            matches["درجة تطابق المركز"] = matches["__norm_center"].apply(lambda x: fuzz.token_sort_ratio(n_center, x))
-            matches = matches[matches["درجة تطابق المركز"] >= 80]
-            matches = matches.sort_values(["درجة تطابق الاسم", "درجة تطابق المركز"], ascending=False)
+        # عند التكرار نلجأ لتطابق المركز
+        if len(subset)>1:
+            subset["score_center"]=subset["__n_center"].apply(lambda x:fuzz.token_sort_ratio(n_center,x))
+            subset=subset[subset["score_center"]>=80]
+        else:
+            subset["score_center"]=0
 
-        for _, r in matches.iterrows():
+        for _,r in subset.iterrows():
             results.append({
-                "الاسم (من الملف)": name,
-                "اسم مركز الاقتراع (من الملف)": center,
-                "الاسم في القاعدة": r["الاسم الثلاثي"],
-                "مركز الاقتراع (من القاعدة)": r["اسم مركز الاقتراع"],
-                "رقم الناخب": r["رقم الناخب"],
-                "درجة تطابق الاسم (%)": r["درجة تطابق الاسم"],
-                "درجة تطابق المركز (%)": r.get("درجة تطابق المركز", 0)
+                "الاسم (من الملف)":name,
+                "اسم مركز الاقتراع (من الملف)":center,
+                "الاسم في القاعدة":r["الاسم الثلاثي"],
+                "مركز الاقتراع (من القاعدة)":r["اسم مركز الاقتراع"],
+                "رقم الناخب":r["رقم الناخب"],
+                "تطابق الاسم %":round(r["score_name"],2),
+                "تطابق المركز %":round(r["score_center"],2)
             })
 
-        progress.progress((i + 1) / total)
+        if (i+1)%10==0 or i+1==total:
+            prog.progress((i+1)/total)
+            log.text(f"{i+1}/{total} تمت ✅")
 
-    st.success(f"✅ تم إكمال البحث في {time.time() - start:.1f} ثانية")
+    st.success(f"انتهى البحث خلال {time.time()-t0:.1f} ثانية")
 
-    result_df = pd.DataFrame(results)
-    if result_df.empty:
-        st.warning("⚠️ لم يتم العثور على نتائج مطابقة.")
+    res=pd.DataFrame(results)
+    if res.empty:
+        st.warning("⚠️ لا توجد نتائج مطابقة")
         st.stop()
 
-    # ================== عرض النتائج ==================
-    st.subheader("🔍 نتائج البحث")
-    search_term = st.text_input("ابحث داخل النتائج (بالاسم أو المركز):")
-    if search_term:
-        filtered = result_df[result_df.apply(lambda x: search_term in str(x).lower(), axis=1)]
+    # ===== بحث داخلي =====
+    term=st.text_input("🔍 ابحث في النتائج:")
+    if term:
+        f=res[res.apply(lambda x:term in str(x).lower(),axis=1)]
     else:
-        filtered = result_df
+        f=res
+    st.dataframe(f,use_container_width=True)
 
-    st.dataframe(filtered, use_container_width=True)
-
-    # ================== تنزيل النتائج ==================
-    out_file = "نتائج_التطابق_النهائية.xlsx"
-    result_df.to_excel(out_file, index=False)
-    with open(out_file, "rb") as f:
-        st.download_button("⬇️ تحميل النتائج بصيغة Excel", f, file_name=out_file)
+    # ===== حفظ مؤقت ونهائي =====
+    temp=tempfile.gettempdir()+"/نتائج_مؤقتة.xlsx"
+    res.to_excel(temp,index=False)
+    with open(temp,"rb") as fh:
+        st.download_button("⬇️ تحميل النتائج النهائية",fh,file_name="نتائج_التطابق.xlsx")
 
 # ----------------------------------------------------------------------------- #
 # 5) 📦 عدّ البطاقات (أرقام 8 خانات) + بحث في القاعدة + قائمة الأرقام غير الموجودة
